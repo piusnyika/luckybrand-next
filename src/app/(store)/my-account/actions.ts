@@ -3,7 +3,8 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "crypto";
-import { createSession, destroySession, requireUser } from "@/lib/auth";
+import { beginLogin, createSession, destroySession, requireUser } from "@/lib/auth";
+import { sendVerificationEmail } from "@/lib/verify-email";
 import { verifyPassword, hashPassword, needsRehash } from "@/lib/password";
 import { sendMail, layout } from "@/lib/mail";
 import { getSite } from "@/lib/settings";
@@ -21,8 +22,11 @@ export async function login(_: FormState, fd: FormData): Promise<FormState> {
   if (!u || !(await verifyPassword(pw, u.passwordHash))) return { error: "Unknown email address or incorrect password." };
   if (u.blocked) return { error: "This account has been disabled. Please contact us if you think this is a mistake." };
   if (needsRehash(u.passwordHash)) await prisma.user.update({ where: { id: u.id }, data: { passwordHash: await hashPassword(pw) } });
-  await createSession(u.id, fd.get("remember") === "on");
-  redirect(safeNext(fd.get("next")));
+  if (!u.emailVerifiedAt) {
+    if (await rateLimit("verify-mail:" + u.id, 3, 60 * 60)) await sendVerificationEmail(u.id);
+    return { error: "Please confirm your email address first. We've sent you a new link; check your inbox (and spam folder)." };
+  }
+  redirect(await beginLogin(u.id, fd.get("remember") === "on", safeNext(fd.get("next"))));
 }
 
 export async function register(_: FormState, fd: FormData): Promise<FormState> {
@@ -33,8 +37,8 @@ export async function register(_: FormState, fd: FormData): Promise<FormState> {
   if (pw.length < 8) return { error: "Password must be at least 8 characters." };
   if (await prisma.user.findFirst({ where: { email: { equals: email, mode: "insensitive" } }, select: { id: true } })) return { error: "An account is already registered with your email address. Please log in." };
   const r = await prisma.user.create({ data: { email, username: email, passwordHash: await hashPassword(pw), displayName: email.split("@")[0], role: "customer" }, select: { id: true } });
-  await createSession(r.id);
-  redirect(safeNext(fd.get("next")));
+  await sendVerificationEmail(r.id);
+  return { ok: `Almost done! We've sent a link to ${email}. Click it to activate your account, then you're logged in.` };
 }
 
 export async function logout() { await destroySession(); redirect("/my-account/"); }
@@ -91,7 +95,7 @@ export async function resetPassword(_: FormState, fd: FormData): Promise<FormSta
   if (pw !== String(fd.get("confirm") || "")) return { error: "Passwords do not match." };
   const u = await prisma.user.findFirst({ where: { resetToken: token, resetExpires: { gt: new Date() } } });
   if (!u || u.blocked) return { error: "This password reset link is invalid or has expired." };
-  await prisma.user.update({ where: { id: u.id }, data: { passwordHash: await hashPassword(pw), resetToken: null, resetExpires: null, sessionVersion: u.sessionVersion + 1 } });
-  await createSession(u.id);
-  redirect("/my-account/");
+  // the reset link was emailed, so it also confirms the address
+  await prisma.user.update({ where: { id: u.id }, data: { passwordHash: await hashPassword(pw), resetToken: null, resetExpires: null, sessionVersion: u.sessionVersion + 1, emailVerifiedAt: u.emailVerifiedAt ?? new Date(), verifyToken: null } });
+  redirect(await beginLogin(u.id, true, "/my-account/"));
 }

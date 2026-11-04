@@ -14,10 +14,12 @@ const GOOGLE_ERRORS: Record<string, string> = {
   blocked: "This account has been disabled. Please contact us if you think this is a mistake.",
   failed: "We couldn't sign you in with Google. Please try again or use your email and password.",
 };
-export default async function MyAccount({ searchParams }: { searchParams: Promise<{ next?: string; google_error?: string }> }) {
+export default async function MyAccount({ searchParams }: { searchParams: Promise<{ next?: string; google_error?: string; verified?: string }> }) {
   const user = await getCurrentUser();
-  const { next, google_error } = await searchParams;
+  const { next, google_error, verified } = await searchParams;
   if (!user) return <div className="container"><Breadcrumbs items={[{ label: "My account" }]} />
+    {verified === "1" && <p className="mx-auto mt-6 max-w-4xl rounded-form bg-green-50 px-4 py-3 text-sm text-green-800">Your email address is confirmed. You can log in now.</p>}
+    {verified === "invalid" && <p className="mx-auto mt-6 max-w-4xl rounded-form bg-red-50 px-4 py-3 text-sm text-danger">That confirmation link is invalid or was already used. Try logging in; if your address isn't confirmed yet, we'll send a new link.</p>}
     <LoginRegister next={next || "/my-account/"} google={googleEnabled()} googleError={google_error ? GOOGLE_ERRORS[google_error] ?? GOOGLE_ERRORS.failed : undefined} /></div>;
   return (
     <AccountShell active="/my-account/" title="Dashboard">

@@ -8,7 +8,7 @@ export const metadata = { title: "Dashboard" };
 const PAID = ["processing", "completed", "on-hold"] as const;
 
 export default async function Dashboard() {
-  await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
+  const me = await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const now = new Date(); const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const since30 = new Date(new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10) + "T00:00:00Z");
@@ -41,6 +41,12 @@ export default async function Dashboard() {
       <FlashToast />
       <PageHeader title="Dashboard" subtitle={now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
         actions={<><Link href="/admin/products/new/" className="btn-primary h-10 text-sm">+ Add product</Link><Link href="/admin/orders/" className="btn-outline h-10 text-sm">View orders</Link></>} />
+      {!me.totpSecret && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-base border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span><strong>Protect your account:</strong> turn on two-step login so a stolen password alone can't open the admin.</span>
+          <Link href="/admin/security/" className="btn-primary h-9 text-sm">Set it up</Link>
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Sales this month" value={money(month.total)} sub={change === null ? `${month.n} orders` : `${change >= 0 ? "▲" : "▼"} ${Math.abs(change).toFixed(0)}% vs last month · ${month.n} orders`} />
         <Kpi label="Orders to process" value={String(sc.processing ?? 0)} sub={`${sc["on-hold"] ?? 0} on hold · ${sc.pending ?? 0} pending payment`} href="/admin/orders/?status=processing" />

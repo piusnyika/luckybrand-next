@@ -9,3 +9,4 @@ storage/uploads/*
 # Prisma / local Postgres
 deploy/.env
 *.tsbuildinfo
+storage/backups/

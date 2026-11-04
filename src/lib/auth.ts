@@ -15,6 +15,7 @@ const secret = () => {
 
 export async function createSession(userId: number, remember = true) {
   const u = await prisma.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } });
+  (await cookies()).delete(PENDING);
   const token = await new SignJWT({ uid: userId, sv: u?.sessionVersion ?? 0 }).setProtectedHeader({ alg: "HS256" }).setIssuedAt()
     .setExpirationTime(remember ? "30d" : "1d").sign(secret());
   (await cookies()).set(COOKIE, token, {
@@ -23,6 +24,35 @@ export async function createSession(userId: number, remember = true) {
   });
 }
 export async function destroySession() { (await cookies()).delete(COOKIE); }
+
+/* ---------- two-step login ---------- */
+const PENDING = "lb_2fa";
+
+/**
+ * Logs a user in after their password (or Google, or a reset link) checked out. Accounts with two-step login
+ * get a 10-minute "code pending" cookie instead and are sent to /admin/two-step/. Returns the URL to go to.
+ */
+export async function beginLogin(userId: number, remember: boolean, next: string): Promise<string> {
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { totpSecret: true, sessionVersion: true } });
+  if (!u?.totpSecret) { await createSession(userId, remember); return next; }
+  const token = await new SignJWT({ uid: userId, sv: u.sessionVersion, rem: remember, next, p: "2fa" }).setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt().setExpirationTime("10m").sign(secret());
+  (await cookies()).set(PENDING, token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 600 });
+  return "/admin/two-step/";
+}
+
+/** The login waiting for its two-step code, if any */
+export async function pendingLogin() {
+  const token = (await cookies()).get(PENDING)?.value;
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, secret());
+    if (payload.p !== "2fa") return null;
+    const next = String(payload.next || "/");
+    return { userId: Number(payload.uid), sessionVersion: Number(payload.sv ?? 0), remember: !!payload.rem, next: next.startsWith("/") && !next.startsWith("//") ? next : "/" };
+  } catch { return null; }
+}
+export async function clearPendingLogin() { (await cookies()).delete(PENDING); }
 
 export const getCurrentUser = cache(async () => {
   const token = (await cookies()).get(COOKIE)?.value;

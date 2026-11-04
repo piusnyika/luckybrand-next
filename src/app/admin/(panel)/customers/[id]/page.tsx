@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { getCurrentUser, requireStaff } from "@/lib/auth";
 import { money, formatDate, STATUS_LABEL, STATUS_COLOR } from "@/lib/format";
 import { PageHeader, Card, Field, Badge, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
-import { saveCustomer, blockCustomer, deleteCustomer } from "../actions";
+import { saveCustomer, blockCustomer, deleteCustomer, resetTwoStep } from "../actions";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Customer" };
@@ -51,6 +51,14 @@ export default async function Customer({ params }: { params: Promise<{ id: strin
               <ConfirmButton formAction={deleteCustomer} message={`Delete ${u.email}'s account permanently? Their ${orders.length} order(s) will be kept. This cannot be undone.`}>Delete account</ConfirmButton>
             </form>
             <p className="mt-3 text-xs text-ink-muted">Blocking stops logins (password and Google) and signs them out straight away, and you can undo it. Deleting removes the account for good; their orders stay in Orders.</p>
+            {!u.emailVerifiedAt && <p className="mt-3 text-xs text-amber-800">Email address not confirmed yet: they can't log in until they click the link we emailed (a new one is sent when they try).</p>}
+            {u.totpSecret && me?.role === "admin" && me.id !== u.id && (
+              <form className="mt-4 border-t border-line pt-4">
+                <input type="hidden" name="id" value={u.id} />
+                <p className="mb-2 text-sm">Two-step login is <strong>on</strong> for this account.</p>
+                <ConfirmButton formAction={resetTwoStep} message="Turn off two-step login for this account? Only do this if you've confirmed it's really them and they lost their phone and recovery codes.">Turn off their two-step login</ConfirmButton>
+              </form>
+            )}
           </Card>
         )}
         <Card title={`Orders (${orders.length})`}>

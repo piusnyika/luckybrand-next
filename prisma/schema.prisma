@@ -15,30 +15,120 @@ datasource db {
 }
 
 model User {
-  id             Int       @id @default(autoincrement())
-  email          String    @unique @db.VarChar(191)
-  username       String?   @db.VarChar(191)
-  passwordHash   String    @map("password_hash") @db.VarChar(255)
-  firstName      String    @default("") @map("first_name") @db.VarChar(120)
-  lastName       String    @default("") @map("last_name") @db.VarChar(120)
-  displayName    String    @default("") @map("display_name") @db.VarChar(191)
-  phone          String    @default("") @db.VarChar(50)
+  id              Int       @id @default(autoincrement())
+  email           String    @unique @db.VarChar(191)
+  username        String?   @db.VarChar(191)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  firstName       String    @default("") @map("first_name") @db.VarChar(120)
+  lastName        String    @default("") @map("last_name") @db.VarChar(120)
+  displayName     String    @default("") @map("display_name") @db.VarChar(191)
+  phone           String    @default("") @db.VarChar(50)
   /// admin | manager | customer
-  role           String    @default("customer") @db.VarChar(20)
+  role            String    @default("customer") @db.VarChar(20)
   /// raised when the password changes, which signs out every existing session
-  sessionVersion Int       @default(0) @map("session_version")
+  sessionVersion  Int       @default(0) @map("session_version")
   /// blocked accounts can't log in; existing sessions stop working
-  blocked        Boolean   @default(false)
-  billing        Json?
-  shipping       Json?
-  resetToken     String?   @map("reset_token") @db.VarChar(100)
-  resetExpires   DateTime? @map("reset_expires")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  blocked         Boolean   @default(false)
+  billing         Json?
+  shipping        Json?
+  resetToken      String?   @map("reset_token") @db.VarChar(100)
+  resetExpires    DateTime? @map("reset_expires")
+  /// null until the customer clicks the link in the verification email (accounts from before verification existed were marked verified)
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  verifyToken     String?   @map("verify_token") @db.VarChar(100)
+  /// two-step login (authenticator app): set once confirmed with a code; base32 secret
+  totpSecret      String?   @map("totp_secret") @db.VarChar(64)
+  /// secret shown during setup, until confirmed
+  totpPending     String?   @map("totp_pending") @db.VarChar(64)
+  /// last 30-second step accepted, so a code can't be used twice
+  totpLastStep    Int?      @map("totp_last_step")
+  /// sha256 hashes of unused one-time recovery codes
+  totpRecovery    Json?     @map("totp_recovery")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
 
-  orders Order[]
+  orders    Order[]
+  reviews   Review[]
+  savedCart SavedCart?
 
   @@map("users")
+}
+
+/// Product reviews. Shown once approved in the admin; verified = the reviewer bought the product.
+model Review {
+  id        Int      @id @default(autoincrement())
+  productId Int      @map("product_id")
+  userId    Int?     @map("user_id")
+  name      String   @db.VarChar(120)
+  email     String   @db.VarChar(191)
+  rating    Int
+  title     String   @default("") @db.VarChar(191)
+  body      String
+  /// pending | approved | rejected
+  status    String   @default("pending") @db.VarChar(20)
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([productId, status], map: "rev_product")
+  @@index([status, createdAt], map: "rev_status")
+  @@map("reviews")
+}
+
+/// A logged-in customer's cart, kept on the server for abandoned-cart reminders and to follow them across devices
+model SavedCart {
+  userId     Int       @id @map("user_id")
+  /// [{ id, qty, name, slug, price, image }]
+  lines      Json
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at")
+  /// reminder email sent for this version of the cart
+  remindedAt DateTime? @map("reminded_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([updatedAt], map: "cart_updated")
+  @@map("saved_carts")
+}
+
+/// "Email me when it's back in stock"
+model StockAlert {
+  id         Int       @id @default(autoincrement())
+  productId  Int       @map("product_id")
+  email      String    @db.VarChar(191)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  notifiedAt DateTime? @map("notified_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, email], map: "alert_product_email")
+  @@index([notifiedAt], map: "alert_open")
+  @@map("stock_alerts")
+}
+
+/// Quote requests for larger orders; staff can turn one into an order
+model QuoteRequest {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(191)
+  email     String   @db.VarChar(191)
+  phone     String   @default("") @db.VarChar(50)
+  company   String   @default("") @db.VarChar(191)
+  city      String   @default("") @db.VarChar(120)
+  message   String   @default("")
+  /// [{ productId, name, sku, qty }]
+  items     Json
+  /// new | quoted | won | lost
+  status    String   @default("new") @db.VarChar(20)
+  staffNote String   @default("") @map("staff_note")
+  orderId   Int?     @map("order_id")
+  userId    Int?     @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt], map: "quote_status")
+  @@map("quote_requests")
 }
 
 model Media {
@@ -102,45 +192,47 @@ model Tag {
 }
 
 model Product {
-  id                Int       @id @default(autoincrement())
-  name              String    @db.VarChar(255)
-  slug              String    @unique @db.VarChar(191)
-  sku               String?   @db.VarChar(100)
+  id                 Int       @id @default(autoincrement())
+  name               String    @db.VarChar(255)
+  slug               String    @unique @db.VarChar(191)
+  sku                String?   @db.VarChar(100)
   /// published | draft | trash
-  status            String    @default("published") @db.VarChar(20)
+  status             String    @default("published") @db.VarChar(20)
   /// simple | bundle. A bundle is made of other products (ProductBundleItem); its stock comes from them
-  type              String    @default("simple") @db.VarChar(20)
+  type               String    @default("simple") @db.VarChar(20)
   /// set while status is "trash"; restored to statusBeforeTrash, emptied automatically after 30 days
-  trashedAt         DateTime? @map("trashed_at")
+  trashedAt          DateTime? @map("trashed_at")
   /// published | draft
-  statusBeforeTrash String?   @map("status_before_trash") @db.VarChar(20)
-  shortDescription  String?   @map("short_description")
-  description       String?
-  specification     String?
-  regularPrice      Decimal   @default(0) @map("regular_price") @db.Decimal(12, 2)
-  salePrice         Decimal?  @map("sale_price") @db.Decimal(12, 2)
-  saleFrom          DateTime? @map("sale_from")
-  saleTo            DateTime? @map("sale_to")
+  statusBeforeTrash  String?   @map("status_before_trash") @db.VarChar(20)
+  shortDescription   String?   @map("short_description")
+  description        String?
+  specification      String?
+  regularPrice       Decimal   @default(0) @map("regular_price") @db.Decimal(12, 2)
+  salePrice          Decimal?  @map("sale_price") @db.Decimal(12, 2)
+  saleFrom           DateTime? @map("sale_from")
+  saleTo             DateTime? @map("sale_to")
   /// instock | outofstock | onbackorder
-  stockStatus       String    @default("instock") @map("stock_status") @db.VarChar(20)
-  manageStock       Boolean   @default(false) @map("manage_stock")
-  stockQty          Int?      @map("stock_qty")
-  lowStockAmount    Int?      @map("low_stock_amount")
-  weight            String    @default("") @db.VarChar(50)
-  featured          Boolean   @default(false)
-  badgeText         String    @default("") @map("badge_text") @db.VarChar(100)
-  videoUrl          String    @default("") @map("video_url") @db.VarChar(512)
+  stockStatus        String    @default("instock") @map("stock_status") @db.VarChar(20)
+  manageStock        Boolean   @default(false) @map("manage_stock")
+  stockQty           Int?      @map("stock_qty")
+  lowStockAmount     Int?      @map("low_stock_amount")
+  weight             String    @default("") @db.VarChar(50)
+  featured           Boolean   @default(false)
+  badgeText          String    @default("") @map("badge_text") @db.VarChar(100)
+  videoUrl           String    @default("") @map("video_url") @db.VarChar(512)
   /// ProductAttribute[]
-  attributes        Json?
-  seoTitle          String    @default("") @map("seo_title") @db.VarChar(255)
-  seoDescription    String?   @map("seo_description")
-  focusKeyword      String    @default("") @map("focus_keyword") @db.VarChar(191)
-  primaryCategoryId Int?      @map("primary_category_id")
-  imageId           Int?      @map("image_id")
-  totalSales        Int       @default(0) @map("total_sales")
-  views             Int       @default(0)
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
+  attributes         Json?
+  seoTitle           String    @default("") @map("seo_title") @db.VarChar(255)
+  seoDescription     String?   @map("seo_description")
+  focusKeyword       String    @default("") @map("focus_keyword") @db.VarChar(191)
+  primaryCategoryId  Int?      @map("primary_category_id")
+  imageId            Int?      @map("image_id")
+  totalSales         Int       @default(0) @map("total_sales")
+  views              Int       @default(0)
+  /// staff were emailed that stock is low; cleared once stock is back above the threshold
+  lowStockNotifiedAt DateTime? @map("low_stock_notified_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
 
   primaryCategory Category?           @relation(fields: [primaryCategoryId], references: [id], onDelete: SetNull)
   image           Media?              @relation(fields: [imageId], references: [id], onDelete: SetNull)
@@ -150,6 +242,8 @@ model Product {
   images          ProductImage[]
   bundleItems     ProductBundleItem[]
   orderItems      OrderItem[]
+  reviews         Review[]
+  stockAlerts     StockAlert[]
 
   @@index([status, createdAt], map: "prod_status_created")
   @@index([featured], map: "prod_featured")
@@ -254,9 +348,10 @@ model Order {
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at")
 
-  user  User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
-  items OrderItem[]
-  notes OrderNote[]
+  user   User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items  OrderItem[]
+  notes  OrderNote[]
+  quotes QuoteRequest[]
 
   @@index([status, createdAt], map: "ord_status_created")
   @@index([email], map: "ord_email")

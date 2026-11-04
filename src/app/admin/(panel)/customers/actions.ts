@@ -20,6 +20,14 @@ export async function deleteCustomer(fd: FormData) {
   redirect(`/admin/customers/?msg=${encodeURIComponent("Customer deleted. Their orders were kept.")}`);
 }
 
+/** For staff who lost both their phone and their recovery codes: an admin turns two-step login off for them */
+export async function resetTwoStep(fd: FormData) {
+  const me = await requireStaff(); const id = Number(fd.get("id"));
+  if (me.role !== "admin" || id === me.id) redirect(`/admin/customers/${id}/?msg=${encodeURIComponent("Error: only an admin can do this, for another account")}`);
+  await prisma.user.update({ where: { id }, data: { totpSecret: null, totpPending: null, totpLastStep: null, totpRecovery: Prisma.DbNull } });
+  redirect(`/admin/customers/${id}/?msg=${encodeURIComponent("Two-step login turned off. They can set it up again under Two-step login.")}`);
+}
+
 export async function bulkCustomers(fd: FormData) {
   const me = await requireStaff();
   const sel = fd.getAll("sel").map(Number).filter(Boolean); const action = String(fd.get("bulk") || ""); const qs = String(fd.get("qs") || "");

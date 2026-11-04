@@ -4,6 +4,7 @@ import { z } from "zod";
 import { quoteCart, createOrder, setOrderStatus, addNote } from "@/lib/orders";
 import { getSetting, type PaymentSettings } from "@/lib/settings";
 import { getCurrentUser, createSession } from "@/lib/auth";
+import { sendVerificationEmail } from "@/lib/verify-email";
 import { hashPassword } from "@/lib/password";
 import { initiate, initiateMobile, normalisePhone } from "@/lib/paynow";
 import { createPayment, saveReference } from "@/lib/ngenius";
@@ -55,7 +56,9 @@ export async function placeOrder(input: CheckoutInput): Promise<{ ok: true; redi
       displayName: `${d.billing.firstName} ${d.billing.lastName}`, phone: d.phone, role: "customer",
       billing: { ...d.billing, email: d.email, phone: d.phone },
     } });
+    // logged in for this order straight away; the address is confirmed by email before the next login
     await createSession(created.id);
+    await sendVerificationEmail(created.id).catch((e) => console.error("verification mail:", e));
     user = created;
   }
   const h = await headers();

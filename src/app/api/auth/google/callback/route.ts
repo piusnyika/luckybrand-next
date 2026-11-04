@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { createSession } from "@/lib/auth";
+import { beginLogin } from "@/lib/auth";
 import { finishLogin, GOOGLE_COOKIE } from "@/lib/google";
 import { prisma } from "@/lib/prisma";
 
@@ -27,11 +27,12 @@ export async function GET(req: NextRequest) {
     // no password: they sign in with Google, or set one later via "Lost your password?"
     user = await prisma.user.create({ data: {
       email, username: email, passwordHash: "", firstName, lastName,
-      displayName: name || `${firstName} ${lastName}`.trim() || email.split("@")[0], role: "customer",
+      displayName: name || `${firstName} ${lastName}`.trim() || email.split("@")[0], role: "customer", emailVerifiedAt: new Date(),
     } });
   } else if (!user.firstName && !user.lastName && (profile!.firstName || profile!.lastName)) {
     await prisma.user.update({ where: { id: user.id }, data: { firstName: profile!.firstName, lastName: profile!.lastName } });
   }
-  await createSession(user.id);
-  redirect(saved.next || "/my-account/");
+  // Google has confirmed the address
+  if (!user.emailVerifiedAt) await prisma.user.update({ where: { id: user.id }, data: { emailVerifiedAt: new Date(), verifyToken: null } });
+  redirect(await beginLogin(user.id, true, saved.next || "/my-account/"));
 }

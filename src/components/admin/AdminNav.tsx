@@ -4,18 +4,21 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { Icon } from "../Icon";
 
-const GROUPS: { title?: string; items: { href: string; label: string; icon: string; badge?: "orders" | "messages"; admin?: boolean }[] }[] = [
+const GROUPS: { title?: string; items: { href: string; label: string; icon: string; badge?: "orders" | "messages" | "quotes" | "reviews"; admin?: boolean }[] }[] = [
   { items: [{ href: "/admin/", label: "Dashboard", icon: "dashboard" }] },
   { title: "Sales", items: [
     { href: "/admin/orders/", label: "Orders", icon: "receipt", badge: "orders" },
+    { href: "/admin/quotes/", label: "Quote requests", icon: "edit", badge: "quotes" },
     { href: "/admin/customers/", label: "Customers", icon: "users" },
     { href: "/admin/coupons/", label: "Coupons", icon: "tag" },
+    { href: "/admin/reports/", label: "Reports", icon: "chart" },
   ] },
   { title: "Catalogue", items: [
     { href: "/admin/products/", label: "Products", icon: "box" },
     { href: "/admin/categories/", label: "Categories", icon: "folder" },
     { href: "/admin/brands/", label: "Brands & tags", icon: "star" },
     { href: "/admin/media/", label: "Media library", icon: "image" },
+    { href: "/admin/reviews/", label: "Reviews", icon: "star", badge: "reviews" },
   ] },
   { title: "Content", items: [
     { href: "/admin/homepage/", label: "Homepage", icon: "layout" },
@@ -26,10 +29,11 @@ const GROUPS: { title?: string; items: { href: string; label: string; icon: stri
   { title: "Store", items: [
     { href: "/admin/settings/", label: "Settings", icon: "settings", admin: true },
     { href: "/admin/redirects/", label: "Redirects", icon: "link", admin: true },
+    { href: "/admin/security/", label: "Two-step login", icon: "shield" },
   ] },
 ];
 
-export function AdminNav({ user, logo, badges }: { user: { name: string; role: string }; logo: string; badges: { orders: number; messages: number } }) {
+export function AdminNav({ user, logo, badges }: { user: { name: string; role: string }; logo: string; badges: { orders: number; messages: number; quotes: number; reviews: number } }) {
   const path = usePathname(); const [open, setOpen] = useState(false);
   const active = (h: string) => (h === "/admin/" ? path === "/admin" || path === "/admin/" : path.startsWith(h.replace(/\/$/, "")));
   const nav = (
