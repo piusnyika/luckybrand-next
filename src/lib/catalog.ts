@@ -9,6 +9,8 @@ export type ProductCard = {
   id: number; name: string; slug: string; sku: string | null;
   price: number; regularPrice: number; salePrice: number | null; onSale: boolean;
   image: string | null; imageAlt: string; stockStatus: StockStatus; badgeText: string; isBundle?: boolean;
+  /** approved reviews: average stars and how many (only when it has any) */
+  rating?: { avg: number; count: number };
 };
 
 /** Price actually charged right now (sale price respects its schedule) */
@@ -28,14 +30,18 @@ const priceExpr = Prisma.sql`(CASE WHEN p.sale_price IS NOT NULL AND p.sale_pric
 /** Columns for a product card, from `products p LEFT JOIN media m` */
 const cardColumns = Prisma.sql`p.id, p.name, p.slug, p.sku, p.regular_price::text AS "regularPrice", p.sale_price::text AS "salePrice",
   p.sale_from AS "saleFrom", p.sale_to AS "saleTo", p.stock_status AS "stockStatus", p.badge_text AS "badgeText", p.type,
-  m.url AS image, m.alt AS "imageAlt"`;
+  m.url AS image, m.alt AS "imageAlt",
+  (SELECT ROUND(AVG(r.rating), 1)::float FROM reviews r WHERE r.product_id = p.id AND r.status = 'approved') AS "ratingAvg",
+  (SELECT COUNT(*)::int FROM reviews r WHERE r.product_id = p.id AND r.status = 'approved') AS "ratingCount"`;
 type CardRow = {
   id: number; name: string; slug: string; sku: string | null; regularPrice: string; salePrice: string | null;
   saleFrom: Date | null; saleTo: Date | null; stockStatus: StockStatus; badgeText: string; type: string; image: string | null; imageAlt: string | null;
+  ratingAvg: number | null; ratingCount: number;
 };
 function toCard(r: CardRow): ProductCard {
   const p = effectivePrice(r);
-  return { id: r.id, name: r.name, slug: r.slug, sku: r.sku, ...p, image: r.image ?? null, imageAlt: r.imageAlt || r.name, stockStatus: r.stockStatus, badgeText: r.badgeText, ...(r.type === "bundle" ? { isBundle: true } : {}) };
+  return { id: r.id, name: r.name, slug: r.slug, sku: r.sku, ...p, image: r.image ?? null, imageAlt: r.imageAlt || r.name, stockStatus: r.stockStatus, badgeText: r.badgeText, ...(r.type === "bundle" ? { isBundle: true } : {}),
+    ...(r.ratingCount ? { rating: { avg: Number(r.ratingAvg), count: r.ratingCount } } : {}) };
 }
 
 /* ---------------- categories ---------------- */

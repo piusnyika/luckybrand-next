@@ -1,12 +1,17 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 /** Description / Specifications tabs. Every panel stays in the HTML (hidden, not removed) so search engines see all of it. */
 export function ProductTabs({ tabs }: { tabs: { key: string; label: string; content: React.ReactNode }[] }) {
   const [active, setActive] = useState(tabs[0]?.key);
+  // links like #reviews open their tab
+  useEffect(() => {
+    const open = () => { const k = location.hash.slice(1); if (tabs.some((t) => t.key === k)) setActive(k); };
+    open(); window.addEventListener("hashchange", open); return () => window.removeEventListener("hashchange", open);
+  }, [tabs]);
   if (!tabs.length) return null;
   return (
-    <section className="mt-16">
+    <section className="mt-16" id={tabs.some((t) => t.key === active) ? active : undefined}>
       <div role="tablist" className="flex gap-6 overflow-x-auto border-b border-line">
         {tabs.map((t) => (
           <button key={t.key} type="button" role="tab" id={`tab-${t.key}`} aria-controls={`panel-${t.key}`} aria-selected={active === t.key}

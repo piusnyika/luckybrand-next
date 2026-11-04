@@ -4,6 +4,7 @@ import { money } from "@/lib/format";
 import type { ProductCard as Card } from "@/lib/catalog";
 import { AddToCartButton } from "./AddToCartButton";
 import { WishButton } from "./WishButton";
+import { Stars } from "./Stars";
 
 export function Price({ p, className = "" }: { p: Pick<Card, "price" | "regularPrice" | "onSale">; className?: string }) {
   return (
@@ -48,6 +49,7 @@ export function ProductCard({ p }: { p: Card }) {
         <h3 className="mt-1 line-clamp-2 text-[13px] font-semibold leading-[1.3] sm:text-sm">
           <Link href={`/product/${p.slug}/`} className="hover:text-primary">{p.name}</Link>
         </h3>
+        {p.rating && <span className="mt-1 flex items-center gap-1 text-[11px] text-ink-muted"><Stars value={p.rating.avg} size={12} />({p.rating.count})</span>}
         <Price p={p} className="mt-1.5 text-base sm:text-lg" />
         <div className="mt-auto pt-3"><AddToCartButton product={forCart(p)} className="w-full" /></div>
       </div>
@@ -66,6 +68,7 @@ export function ProductCell({ p }: { p: Card }) {
         <h3 className="mt-1 line-clamp-2 text-[13px] font-semibold leading-[1.3] sm:text-sm">
           <Link href={`/product/${p.slug}/`} className="hover:text-primary">{p.name}</Link>
         </h3>
+        {p.rating && <span className="mt-1 flex items-center gap-1 text-[11px] text-ink-muted"><Stars value={p.rating.avg} size={12} />({p.rating.count})</span>}
         <div className="mt-auto pt-3"><AddToCartButton product={forCart(p)} /></div>
       </div>
     </div>

@@ -12,6 +12,10 @@ import { ProductTabs } from "@/components/store/ProductTabs";
 import { getBundleItems, bundleMaxQty, bundlePrice } from "@/lib/bundles";
 import { Icon } from "@/components/Icon";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/auth";
+import { productReviews } from "@/lib/reviews";
+import { Reviews } from "@/components/store/Reviews";
+import { Stars } from "@/components/store/Stars";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const p = await getProductBySlug(decodeURIComponent((await params).slug));
@@ -29,7 +33,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
   if (!p) notFound();
   prisma.product.update({ where: { id: p.id }, data: { views: { increment: 1 } }, select: { id: true } }).catch(() => {});
 
-  const [site, urls] = await Promise.all([getSite(), categoryUrlMap()]);
+  const [site, urls, rev, user] = await Promise.all([getSite(), categoryUrlMap(), productReviews(p.id), getCurrentUser()]);
   const primary = p.categoryList.find((c) => c.id === p.primaryCategoryId) ?? p.categoryList[0];
   // the longest path through the main category, so the breadcrumb shows every level the product is filed under
   const paths = await Promise.all(p.categoryList.map((c) => categoryPath(c)));
@@ -53,6 +57,12 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
     brand: p.brandList[0] ? { "@type": "Brand", name: p.brandList[0].name } : undefined,
     offers: { "@type": "Offer", url, priceCurrency: site.currency, price: price.toFixed(2),
       availability: stockStatus === "outofstock" ? "https://schema.org/OutOfStock" : "https://schema.org/InStock", itemCondition: "https://schema.org/NewCondition" },
+    // star ratings in Google results
+    ...(rev.count ? {
+      aggregateRating: { "@type": "AggregateRating", ratingValue: rev.avg, reviewCount: rev.count, bestRating: 5, worstRating: 1 },
+      review: rev.reviews.slice(0, 5).map((r) => ({ "@type": "Review", author: { "@type": "Person", name: r.name }, datePublished: r.createdAt.toISOString().slice(0, 10),
+        reviewRating: { "@type": "Rating", ratingValue: r.rating, bestRating: 5 }, ...(r.title ? { name: r.title } : {}), reviewBody: r.body })),
+    } : {}),
   };
 
   return (
@@ -62,6 +72,9 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
         <Gallery images={p.gallery} name={p.name} videoUrl={p.videoUrl} />
         <div>
           <h1 className="border-b border-line pb-4 text-2xl font-semibold leading-tight lg:text-[28px]">{p.name}</h1>
+          <a href="#reviews" className="mt-3 inline-flex items-center gap-2 text-sm text-ink-soft hover:text-primary">
+            <Stars value={rev.avg} />{rev.count ? `${rev.avg.toFixed(1)} (${rev.count} review${rev.count === 1 ? "" : "s"})` : "Be the first to review"}
+          </a>
           <div className="mt-5 text-2xl font-bold lg:text-[26px]">
             {!bundle && p.onSale && <del className="mr-2 text-lg font-medium text-ink-muted">{money(p.regularPrice)}</del>}
             <span className={!bundle && p.onSale ? "text-danger" : ""}>{money(price)}</span>
@@ -113,6 +126,8 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
             </table>
           )}
         </> }] : []),
+        { key: "reviews", label: `Reviews (${rev.count})`, content: <Reviews productId={p.id} count={rev.count} avg={rev.avg} dist={rev.dist}
+          reviews={rev.reviews.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }))} user={user ? { name: user.displayName || user.firstName || user.email } : null} /> },
       ]} />
 
       {related.length > 0 && (
