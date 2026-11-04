@@ -71,13 +71,23 @@ Test a real Paynow and card payment on the live keys before switching the domain
 
 ## 6. Backups
 
-The database is in the `luckybrand_pgdata` Docker volume; images are in `storage/uploads/`. Back up both every day, e.g. in cron:
+The database is in the `luckybrand_pgdata` Docker volume; images are in `storage/uploads/`. `deploy/backup.sh` backs up
+both: a database dump every night (14 days kept in `/var/backups/luckybrand`), copied off the server with the images.
 
-```bash
-0 2 * * * cd /var/www/luckybrand-next && docker compose -f deploy/docker-compose.yml exec -T db pg_dump -U luckybrand -Fc luckybrand > /var/backups/luckybrand-$(date +\%F).dump
-```
+1. **Off-server storage (once):** create a bucket, e.g. Vultr Object Storage (S3-compatible, same account as the server).
+   Install rclone (`sudo apt install rclone`) and run `rclone config`: new remote named `offsite`, type `s3`,
+   provider `Other`, with the bucket's access key, secret key and endpoint (e.g. `ewr1.vultrobjects.com`).
+   Then `rclone mkdir offsite:luckybrand-backups`. In the bucket settings, add a lifecycle rule deleting `db/` files after 90 days.
+2. **Schedule it:** `sudo crontab -e` and add
+   ```
+   0 2 * * * /var/www/luckybrand-next/deploy/backup.sh >> /var/log/luckybrand-backup.log 2>&1
+   ```
+3. **Check it works:** run `deploy/backup.sh` once by hand. It must say `copied off-server`, not `WARNING`.
+   Then `deploy/restore-test.sh` restores the newest dump into a throwaway database and compares row counts with the live one.
+   Run it once a month.
 
-Keep copies off the server too, and test a restore now and then (`pg_restore` as in step 3, into a test database).
+To restore for real after a disaster, use `pg_restore` as in step 3 with a dump from `/var/backups/luckybrand` or
+`rclone copy offsite:luckybrand-backups/db/<file> .`, and `rclone copy offsite:luckybrand-backups/uploads storage/uploads`.
 
 ## Updating the site (every release after the first)
 
