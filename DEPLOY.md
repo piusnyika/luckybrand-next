@@ -89,6 +89,21 @@ both: a database dump every night (14 days kept in `/var/backups/luckybrand`), c
 To restore for real after a disaster, use `pg_restore` as in step 3 with a dump from `/var/backups/luckybrand` or
 `rclone copy offsite:luckybrand-backups/db/<file> .`, and `rclone copy offsite:luckybrand-backups/uploads storage/uploads`.
 
+## 7. Automatic emails and WhatsApp alerts
+
+The store sends these on its own every 5 minutes (switch each on/off in Admin → Settings → Notifications):
+abandoned-cart reminders, back-in-stock emails, low-stock alerts to staff, and quote-request emails. They need SMTP
+in `.env.docker`. On the first run staff get one list of every product already at its low-stock level (200 per email).
+
+**WhatsApp alerts for new paid orders** (optional), with Meta's WhatsApp Cloud API:
+
+1. In Meta Business Suite, set up WhatsApp (developers.facebook.com → your app → WhatsApp). Use a phone number that isn't already on the WhatsApp app.
+2. In WhatsApp Manager → Message templates, create a **Utility** template named `new_order_alert`, language English, body e.g.
+   `New order {{1}} from {{2}}, total {{3}}. Open the admin to process it.` Wait for approval.
+3. Create a permanent token (Business settings → System users → generate token with `whatsapp_business_messaging`).
+4. Add to `.env.docker`: `WHATSAPP_TOKEN=…` and `WHATSAPP_PHONE_NUMBER_ID=…` (from the WhatsApp → API setup page), then restart the app.
+5. In Admin → Settings → Notifications, tick WhatsApp alerts, add the staff numbers, save, and press **Send test message**.
+
 ## Updating the site (every release after the first)
 
 Database changes are made on the PC with `npm run db:migrate -- --name what_changed`, which adds a folder under

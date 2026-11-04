@@ -42,6 +42,16 @@ export type PaymentSettings = {
   bacs: { enabled: boolean; title: string; description: string; details: string };
   ngenius: { enabled: boolean; title: string; description: string };
 };
+/** Automatic emails / WhatsApp messages (Admin → Settings → Notifications) */
+export type NotificationSettings = {
+  /** who gets staff alerts (low stock, quote requests); empty = the store email */
+  staffEmails: string[];
+  lowStock: boolean;
+  backInStock: boolean;
+  abandonedCart: boolean; abandonedCartHours: number;
+  /** paid-order alerts on WhatsApp (Meta WhatsApp Cloud API; token and phone number id in the server's env) */
+  whatsapp: boolean; whatsappTo: string[]; whatsappTemplate: string; whatsappLanguage: string;
+};
 export type HomeSection =
   | { type: "product-carousel" | "product-grid"; title: string; linkLabel: string; link: string; source: "latest" | "featured" | "on_sale" | "best_selling" | "random"; categoryIds: number[]; limit: number; hideOutOfStock: boolean; banner: null | { image: string; title: string; subtitle: string; text: string; link: string } }
   | { type: "promo-banner"; title: string; html: string; buttonLabel: string; link: string; image: string; background: string };
@@ -64,6 +74,10 @@ const DEFAULTS: Record<string, any> = {
     ngenius: { enabled: false, title: "Credit / Debit card (Visa, Mastercard)", description: "Pay securely with your Visa or Mastercard. You'll enter your card details on our bank's secure payment page." },
   } satisfies PaymentSettings,
   homepage: { slides: [], sections: [] } satisfies HomepageSettings,
+  notifications: {
+    staffEmails: [], lowStock: true, backInStock: true, abandonedCart: true, abandonedCartHours: 3,
+    whatsapp: false, whatsappTo: [], whatsappTemplate: "new_order_alert", whatsappLanguage: "en",
+  } satisfies NotificationSettings,
   orderSequence: { next: 10000 },
 };
 

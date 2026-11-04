@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import { requireAdmin, refreshStore } from "@/lib/admin/guard";
-import { ASSISTANT_MODELS, getSetting, saveSetting, getSite, type PaymentSettings } from "@/lib/settings";
+import { ASSISTANT_MODELS, getSetting, saveSetting, getSite, type NotificationSettings, type PaymentSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 
 const g = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
@@ -55,6 +55,30 @@ export async function saveContact(fd: FormData) {
     social: lines(g(fd, "social")).map((l) => { const [icon, url] = l.split(/\s+/, 2); return { icon: icon.toLowerCase(), url }; }).filter((x) => x.url) });
   done("contact");
 }
+export async function saveNotifications(fd: FormData) {
+  await requireAdmin();
+  const on = (k: string) => fd.get(k) === "on";
+  await saveSetting("notifications", {
+    staffEmails: lines(g(fd, "staffEmails")).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)),
+    lowStock: on("lowStock"), backInStock: on("backInStock"), abandonedCart: on("abandonedCart"),
+    abandonedCartHours: Math.min(72, Math.max(1, Math.round(Number(g(fd, "abandonedCartHours")) || 3))),
+    whatsapp: on("whatsapp"), whatsappTo: lines(g(fd, "whatsappTo")).filter((n) => n.replace(/\D/g, "").length >= 9),
+    whatsappTemplate: g(fd, "whatsappTemplate").replace(/[^a-z0-9_]/gi, "").toLowerCase() || "new_order_alert", whatsappLanguage: g(fd, "whatsappLanguage") || "en",
+  } satisfies NotificationSettings);
+  done("notifications");
+}
+
+export async function testWhatsApp() {
+  await requireAdmin();
+  const n = await getSetting<NotificationSettings>("notifications");
+  const { sendWhatsAppTemplate, whatsappConfigured } = await import("@/lib/whatsapp");
+  let msg = "Test message sent";
+  if (!whatsappConfigured()) msg = "Error: WhatsApp is not connected on the server (WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID)";
+  else if (!n.whatsappTo.length) msg = "Error: add a staff WhatsApp number and save first";
+  else await sendWhatsAppTemplate(n.whatsappTo[0], n.whatsappTemplate, n.whatsappLanguage, ["#TEST", "Test Customer", "$1.00"]).catch((e) => { msg = "Error: " + (e as Error).message; });
+  redirect(`/admin/settings/?tab=notifications&msg=${encodeURIComponent(msg)}`);
+}
+
 export async function saveIntegrations(fd: FormData) {
   await requireAdmin(); const site = await getSite();
   const salesContacts = lines(g(fd, "salesContacts")).map((l) => { const [name, role, phone] = l.split("|").map((x) => x.trim()); return { name, role: role || "Sales", phone: (phone || "").replace(/[^\d+]/g, "") }; }).filter((c) => c.name && c.phone);

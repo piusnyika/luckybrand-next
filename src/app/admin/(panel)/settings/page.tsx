@@ -1,20 +1,22 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
-import { ASSISTANT_MODELS, getSite, getSetting, salesContactsOf, type PaymentSettings } from "@/lib/settings";
+import { ASSISTANT_MODELS, getSite, getSetting, salesContactsOf, type NotificationSettings, type PaymentSettings } from "@/lib/settings";
+import { whatsappConfigured } from "@/lib/whatsapp";
 import { PageHeader, Card, Field, SubmitButton, FlashToast } from "@/components/admin/ui";
 import { ImageField } from "@/components/admin/MediaPicker";
 import { ShippingEditor } from "@/components/admin/ShippingEditor";
-import { saveGeneral, saveAppearance, savePayments, saveShipping, saveContact, saveIntegrations } from "./actions";
+import { saveGeneral, saveAppearance, savePayments, saveShipping, saveContact, saveIntegrations, saveNotifications, testWhatsApp } from "./actions";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
-const TABS = [["general", "Store details"], ["appearance", "Header & footer"], ["payments", "Payments"], ["shipping", "Shipping"], ["contact", "Contact page"], ["integrations", "Integrations"]] as const;
+const TABS = [["general", "Store details"], ["appearance", "Header & footer"], ["payments", "Payments"], ["shipping", "Shipping"], ["contact", "Contact page"], ["notifications", "Notifications"], ["integrations", "Integrations"]] as const;
 
 export default async function Settings({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   await requireAdmin();
   const tab = (await searchParams).tab || "general";
-  const [site, payments, contact, methods] = await Promise.all([getSite(), getSetting<PaymentSettings>("payments"), getSetting<any>("contact"), prisma.shippingMethod.findMany({ orderBy: { sortOrder: "asc" } })]);
+  const [site, payments, contact, methods, notify] = await Promise.all([getSite(), getSetting<PaymentSettings>("payments"), getSetting<any>("contact"), prisma.shippingMethod.findMany({ orderBy: { sortOrder: "asc" } }), getSetting<NotificationSettings>("notifications")]);
+  const check = (name: keyof NotificationSettings, label: React.ReactNode) => <label className="flex items-start gap-2 text-sm"><input type="checkbox" name={name} defaultChecked={!!notify[name]} className="mt-0.5 accent-primary" /><span>{label}</span></label>;
   const env = { paynow: !!process.env.PAYNOW_INTEGRATION_ID && !!process.env.PAYNOW_INTEGRATION_KEY, ngenius: !!process.env.NGENIUS_API_KEY && !!process.env.NGENIUS_OUTLET_REF, smtp: !!process.env.SMTP_HOST, mailchimp: !!process.env.MAILCHIMP_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY };
   return (
     <>
@@ -97,6 +99,35 @@ export default async function Settings({ searchParams }: { searchParams: Promise
         ))}
         <Field label="Social icons" hint="One per line: facebook https://…" className="md:col-span-2"><textarea name="social" rows={4} defaultValue={(contact?.social ?? []).map((x: { icon: string; url: string }) => `${x.icon} ${x.url}`).join("\n")} className="field font-mono text-sm" /></Field>
       </div><div className="mt-6 flex justify-end"><SubmitButton>Save changes</SubmitButton></div></Card></form>}
+
+      {tab === "notifications" && <div className="space-y-6">
+        <form action={saveNotifications}><div className="space-y-6">
+          <Card title="Staff alerts">
+            <Field label="Send staff alerts to" hint={`One email address per line. Empty = the store email (${process.env.ADMIN_EMAIL || site.email || "not set"}). Used for low stock and quote requests.`}>
+              <textarea name="staffEmails" rows={3} defaultValue={notify.staffEmails.join("\n")} className="field h-auto py-2" /></Field>
+            <div className="mt-4">{check("lowStock", <>Email staff when a product reaches its <strong>low-stock level</strong> (set per product; 2 if empty). One email per product until it&apos;s restocked.</>)}</div>
+          </Card>
+          <Card title="Customer emails"><div className="space-y-4">
+            {check("backInStock", <><strong>Back in stock:</strong> out-of-stock products show &ldquo;Email me when it&apos;s back&rdquo;, and we email everyone who asked once it&apos;s in stock again.</>)}
+            {check("abandonedCart", <><strong>Abandoned cart:</strong> remind logged-in customers who left items in their cart and haven&apos;t ordered (one reminder per cart, at most every 3 days).</>)}
+            <Field label="Send the cart reminder after (hours)"><input name="abandonedCartHours" type="number" min={1} max={72} defaultValue={notify.abandonedCartHours} className="field max-w-[120px]" /></Field>
+          </div></Card>
+          <Card title="WhatsApp alerts for new paid orders"><div className="space-y-4">
+            <p className="text-sm text-ink-soft">Uses Meta&apos;s WhatsApp Cloud API. Server status: {whatsappConfigured() ? <strong className="text-success">connected</strong> : <strong className="text-amber-700">not connected: add WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID to the server&apos;s .env (see DEPLOY.md)</strong>}.</p>
+            {check("whatsapp", "Send a WhatsApp message to the numbers below for every new paid or on-hold order")}
+            <Field label="Staff WhatsApp numbers" hint="One per line, e.g. 0772 123 456 or +263772123456"><textarea name="whatsappTo" rows={3} defaultValue={notify.whatsappTo.join("\n")} className="field h-auto py-2" /></Field>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Message template name" hint="Approved in WhatsApp Manager, with body variables {{1}} order number, {{2}} customer, {{3}} total"><input name="whatsappTemplate" defaultValue={notify.whatsappTemplate} className="field" /></Field>
+              <Field label="Template language code"><input name="whatsappLanguage" defaultValue={notify.whatsappLanguage} className="field" placeholder="en" /></Field>
+            </div>
+          </div></Card>
+          <div className="flex justify-end"><SubmitButton>Save changes</SubmitButton></div>
+        </div></form>
+        <form action={testWhatsApp}><Card title="Test WhatsApp">
+          <p className="mb-3 text-sm text-ink-soft">Sends a sample &ldquo;new order&rdquo; alert to the first number above, using the saved template.</p>
+          <SubmitButton className="btn-outline" pendingText="Sending…">Send test message</SubmitButton>
+        </Card></form>
+      </div>}
 
       {tab === "integrations" && <form action={saveIntegrations}><div className="space-y-6">
         <Card title="Chat bubble"><div className="grid gap-4 md:grid-cols-2">

@@ -37,6 +37,26 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener("storage", onStorage); return () => window.removeEventListener("storage", onStorage);
   }, []);
   useEffect(() => { if (ready) save(KEY, lines); }, [lines, ready]);
+  // logged-in customers: keep a copy on the server (other devices, abandoned-cart email). Guests: the server ignores it.
+  const synced = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    const key = JSON.stringify(lines.map((l) => [l.id, l.qty]));
+    if (synced.current === null) {
+      synced.current = key;
+      // empty here but maybe filled on another device: bring it over once per visit
+      let asked = true; try { asked = !!sessionStorage.getItem("lb_cart_restored"); sessionStorage.setItem("lb_cart_restored", "1"); } catch {}
+      if (lines.length) fetch("/api/cart/saved/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines }) }).catch(() => {});
+      else if (!asked) fetch("/api/cart/saved/").then((r) => r.json()).then((j: { lines: CartLine[] }) => { if (j.lines?.length) { synced.current = JSON.stringify(j.lines.map((l) => [l.id, l.qty])); setLines((cur) => (cur.length ? cur : j.lines)); } }).catch(() => {});
+      return;
+    }
+    if (key === synced.current) return;
+    const t = setTimeout(() => {
+      synced.current = key;
+      fetch("/api/cart/saved/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines }), keepalive: true }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [lines, ready]);
   useEffect(() => { if (ready) save(WKEY, wishlist); }, [wishlist, ready]);
   useEffect(() => { if (ready) save(CKEY, compare); }, [compare, ready]);
 

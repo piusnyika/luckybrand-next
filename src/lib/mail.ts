@@ -1,6 +1,6 @@
 import "server-only";
 import nodemailer from "nodemailer";
-import { getSite } from "./settings";
+import { getSetting, getSite, type NotificationSettings } from "./settings";
 import { getOrder, type FullOrder } from "./orders";
 import { money, STATUS_LABEL } from "./format";
 
@@ -49,6 +49,17 @@ export function orderTable(o: FullOrder) {
   <p style="font-size:14px;line-height:1.6;margin:0">${[`${b.firstName ?? ""} ${b.lastName ?? ""}`, b.company, b.address1, b.address2, b.city, b.state, b.country].filter(Boolean).map((x) => escapeHtml(String(x))).join("<br>")}<br>${escapeHtml(o.phone)}<br>${escapeHtml(o.email)}</p>
   ${o.customerNote ? `<p style="font-size:14px"><strong>Note:</strong> ${escapeHtml(o.customerNote)}</p>` : ""}`;
 }
+/** Staff alert recipients: Settings → Notifications, else ADMIN_EMAIL / the store email */
+export async function staffEmails() {
+  const n = await getSetting<NotificationSettings>("notifications");
+  if (n.staffEmails.length) return n.staffEmails;
+  const site = await getSite(); const one = process.env.ADMIN_EMAIL || site.email;
+  return one ? [one] : [];
+}
+
+/** A big blue button for emails */
+export const mailButton = (href: string, label: string) => `<p><a href="${href}" style="display:inline-block;background:#004798;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none">${label}</a></p>`;
+
 export const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 
 /** Customer and admin emails on status transitions */
@@ -62,6 +73,8 @@ export async function sendOrderEmails(orderId: number, status: string, previous:
   const isNew = previous === null || previous === "pending" || previous === "failed";
 
   if (isNew && ["processing", "on-hold"].includes(status)) {
+    const { notifyOrderOnWhatsApp } = await import("./whatsapp");
+    await notifyOrderOnWhatsApp(o);
     await sendMail(admin, `[${site.name}] New order #${o.number}`, await layout(`New order: #${o.number}`,
       `<p>You’ve received the following order from ${escapeHtml(`${o.billing?.firstName ?? ""} ${o.billing?.lastName ?? ""}`)}:</p>${orderTable(o)}<p><a href="${base}/admin/orders/${o.id}/">View in admin</a></p>`), o.email);
     await sendMail(o.email, `Your ${site.name} order has been received!`, await layout("Thank you for your order",

@@ -69,6 +69,7 @@ export async function placeOrder(input: CheckoutInput): Promise<{ ok: true; redi
     userId: user?.id ?? null, ip: (h.get("x-forwarded-for") || "").split(",")[0].trim(),
   });
   if (user && !user.billing) await prisma.user.update({ where: { id: user.id }, data: { billing, phone: d.phone } });
+  if (user) await prisma.savedCart.deleteMany({ where: { userId: user.id } }); // ordered: no abandoned-cart email
 
   const base = process.env.SITE_URL || `${h.get("x-forwarded-proto") || "http"}://${h.get("host")}`;
   const thankYou = `/checkout/order-received/${order.id}/?key=${order.accessKey}`;

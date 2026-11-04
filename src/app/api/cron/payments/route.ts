@@ -13,7 +13,11 @@ async function run(req: NextRequest) {
   if (!internal && !external) return new NextResponse("forbidden", { status: 403 });
   if (g.__lbSyncRunning) return NextResponse.json({ skipped: "already running" });
   g.__lbSyncRunning = true;
-  try { return NextResponse.json(await syncPendingPayments()); }
+  try {
+    const payments = await syncPendingPayments();
+    const { runBackgroundJobs } = await import("@/lib/jobs"); // abandoned carts, back in stock, low stock
+    return NextResponse.json({ ...payments, jobs: await runBackgroundJobs() });
+  }
   catch (e) { console.error("payment check failed:", e); return NextResponse.json({ error: (e as Error).message }, { status: 500 }); }
   finally { g.__lbSyncRunning = false; }
 }

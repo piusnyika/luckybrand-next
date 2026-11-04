@@ -4,7 +4,7 @@ import { requireStaff, refreshStore } from "@/lib/admin/guard";
 import { slugify } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 
-const RESERVED = ["shop", "cart", "checkout", "my-account", "wishlist", "compare", "product", "product-category", "product-tag", "brand", "admin", "api", "uploads"];
+const RESERVED = ["shop", "cart", "checkout", "my-account", "wishlist", "compare", "product", "product-category", "product-tag", "brand", "admin", "api", "uploads", "request-a-quote"];
 export async function savePage(fd: FormData) {
   await requireStaff();
   const g = (k: string) => String(fd.get(k) ?? "").trim(); const id = Number(g("id")) || null;

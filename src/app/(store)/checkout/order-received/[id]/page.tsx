@@ -33,14 +33,17 @@ export default async function OrderReceived({ params, searchParams }: { params: 
   }
   const payments = await getSetting<PaymentSettings>("payments");
   const failed = o.status === "failed" || o.status === "cancelled";
-  const waiting = o.status === "pending";
+  // a quote sent by our sales team (Admin → Quote requests), not a checkout waiting for its payment
+  const isQuote = o.paymentMethod === "quote" && o.status === "pending";
+  const waiting = o.status === "pending" && !isQuote;
   return (
     <div className="container max-w-4xl">
       <Breadcrumbs items={[{ label: "Checkout", href: "/checkout/" }, { label: "Order received" }]} />
-      <div className={`mb-8 flex items-start gap-3 rounded-base p-5 ${failed ? "bg-red-50 text-danger" : waiting ? "bg-amber-50 text-amber-800" : "bg-green-50 text-green-800"}`}>
-        <Icon name={failed ? "close" : waiting ? "clock" : "check"} size={24} />
+      <div className={`mb-8 flex items-start gap-3 rounded-base p-5 ${failed ? "bg-red-50 text-danger" : waiting ? "bg-amber-50 text-amber-800" : isQuote ? "bg-blue-50 text-primary" : "bg-green-50 text-green-800"}`}>
+        <Icon name={failed ? "close" : waiting ? "clock" : isQuote ? "file" : "check"} size={24} />
         <div>
-          <p className="text-lg font-semibold">{failed ? "Unfortunately your order cannot be processed." : waiting ? "We’re waiting for your payment to be confirmed." : "Thank you. Your order has been received."}</p>
+          <p className="text-lg font-semibold">{failed ? "Unfortunately your order cannot be processed." : isQuote ? `Your quote #${o.number}` : waiting ? "We’re waiting for your payment to be confirmed." : "Thank you. Your order has been received."}</p>
+          {isQuote && <p className="mt-1 text-sm">Here are the prices we&apos;ve prepared for you. To go ahead, reply to our email or call us and we&apos;ll arrange payment and delivery.</p>}
           {waiting && (mobile
             ? <p className="mt-1 text-sm">We&apos;ve sent a payment request to <strong>{mobile}</strong>. Check your phone and enter your PIN to approve the payment of <strong>{money(o.total)}</strong>. No prompt? Dial <strong>*151*200#</strong> (EcoCash) to see pending payments. <Link href={`?key=${o.accessKey}&mobile=${encodeURIComponent(mobile)}`} className="font-semibold underline">Refresh</Link></p>
             : <p className="mt-1 text-sm">If you completed the {o.paymentMethod === "ngenius" ? "card" : "Paynow"} payment, refresh this page in a moment. <Link href={`?key=${o.accessKey}`} className="font-semibold underline">Refresh</Link></p>)}

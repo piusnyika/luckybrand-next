@@ -5,10 +5,11 @@ import { AddToCartButton } from "./AddToCartButton";
 import { WishButton } from "./WishButton";
 import { useCart } from "./CartProvider";
 import { Icon } from "../Icon";
+import { StockAlertForm } from "./StockAlertForm";
 import type { ProductCard } from "@/lib/catalog";
 
-export function BuyBox({ product, maxQty, whatsapp, productUrl }: {
-  product: Pick<ProductCard, "id" | "name" | "slug" | "price" | "image" | "stockStatus">; maxQty: number | null; whatsapp: string; productUrl: string;
+export function BuyBox({ product, maxQty, whatsapp, productUrl, userEmail = "" }: {
+  product: Pick<ProductCard, "id" | "name" | "slug" | "price" | "image" | "stockStatus">; maxQty: number | null; whatsapp: string; productUrl: string; userEmail?: string;
 }) {
   const [qty, setQty] = useState(1);
   const { toggleCompare, lines, ready, setDrawerOpen } = useCart();
@@ -28,6 +29,9 @@ export function BuyBox({ product, maxQty, whatsapp, productUrl }: {
           <button type="button" onClick={() => toggleCompare(product.id)} aria-label="Add to compare" className="flex h-[46px] w-[46px] items-center justify-center rounded-form border border-line hover:border-primary hover:text-primary"><Icon name="compare" size={18} /></button>
         </div>
       )}
+      {product.stockStatus === "outofstock" && <StockAlertForm productId={product.id} email={userEmail} />}
+      <p className="mt-4 text-sm text-ink-soft">Buying for a project or in bulk?{" "}
+        <a href={`/request-a-quote/?product=${product.id}&qty=${qty}`} className="font-semibold text-primary hover:underline">Request a quote</a></p>
       {inCart && (
         <p className="mt-3 flex items-center gap-1.5 text-sm text-success">
           <Icon name="check" size={16} strokeWidth={3} />

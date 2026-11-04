@@ -101,7 +101,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
             </div>
           )}
           <BuyBox product={{ id: p.id, name: p.name, slug: p.slug, price, image: p.gallery[0]?.url ?? null, stockStatus }}
-            maxQty={bundle ? bundleMax : p.manageStock ? p.stockQty : null} whatsapp={site.orderOnWhatsapp ? site.whatsapp : ""} productUrl={url} />
+            maxQty={bundle ? bundleMax : p.manageStock ? p.stockQty : null} whatsapp={site.orderOnWhatsapp ? site.whatsapp : ""} productUrl={url} userEmail={user?.email ?? ""} />
           <div className="mt-6 space-y-1.5 text-xs">
             {p.sku && <div><span className="text-ink-muted">SKU: </span><span className="font-medium">{p.sku}</span></div>}
             {p.categoryList.length > 0 && <div><span className="text-ink-muted">Categories: </span>{p.categoryList.map((c, i) => <span key={c.id}>{i > 0 && ", "}<Link href={urls.get(c.id)!} className="font-medium hover:text-primary">{c.name}</Link></span>)}</div>}
