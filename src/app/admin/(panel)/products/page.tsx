@@ -1,0 +1,97 @@
+import { requireStaff } from "@/lib/auth";
+import Link from "next/link";
+import { db, schema as s } from "@/db";
+import { and, asc, desc, eq, inArray, like, ne, or, sql, type SQL } from "drizzle-orm";
+import { descendantIds, getAllCategories, effectivePrice } from "@/lib/catalog";
+import { money } from "@/lib/format";
+import { PageHeader, Badge, Table, th, td, Empty, FlashToast } from "@/components/admin/ui";
+import { Pagination } from "@/components/store/ShopView";
+import { bulkProducts } from "./actions";
+import { BulkBar } from "@/components/admin/BulkBar";
+import { purgeExpiredTrash, TRASH_DAYS } from "@/lib/admin/product-trash";
+
+export const metadata = { title: "Products" };
+type SP = { q?: string; cat?: string; status?: string; stock?: string; sort?: string; page?: string };
+
+export default async function Products({ searchParams }: { searchParams: Promise<SP> }) {
+  await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
+  const sp = await searchParams; const page = Math.max(1, Number(sp.page || 1)); const per = 30;
+  await purgeExpiredTrash();
+  const inTrash = sp.status === "trash";
+  const where: SQL[] = [];
+  if (sp.q) where.push(or(like(s.products.name, `%${sp.q}%`), like(s.products.sku, `%${sp.q}%`))!);
+  if (sp.status === "published" || sp.status === "draft" || sp.status === "trash") where.push(eq(s.products.status, sp.status));
+  else where.push(ne(s.products.status, "trash"));
+  if (sp.stock === "outofstock" || sp.stock === "instock" || sp.stock === "onbackorder") where.push(eq(s.products.stockStatus, sp.stock));
+  if (sp.stock === "low") where.push(sql`${s.products.manageStock} AND ${s.products.stockQty} <= COALESCE(${s.products.lowStockAmount}, 2)`);
+  if (sp.cat) { const cids = await descendantIds([Number(sp.cat)]); where.push(inArray(s.products.id, db.select({ id: s.productCategories.productId }).from(s.productCategories).where(inArray(s.productCategories.categoryId, cids)))); }
+  const order = { name: asc(s.products.name), price: asc(s.products.regularPrice), "price-desc": desc(s.products.regularPrice), sales: desc(s.products.totalSales), stock: asc(s.products.stockQty) }[sp.sort || ""] ?? desc(s.products.id);
+  const cond = where.length ? and(...where) : undefined;
+  const [rows, [{ total }], cats, statusCounts] = await Promise.all([
+    db.select({ p: s.products, image: s.media.url, cat: s.categories.name }).from(s.products).leftJoin(s.media, eq(s.media.id, s.products.imageId))
+      .leftJoin(s.categories, eq(s.categories.id, s.products.primaryCategoryId)).where(cond).orderBy(order).limit(per).offset((page - 1) * per),
+    db.select({ total: sql<number>`COUNT(*)` }).from(s.products).where(cond), getAllCategories(),
+    db.select({ status: s.products.status, n: sql<number>`COUNT(*)` }).from(s.products).groupBy(s.products.status),
+  ]);
+  const count = (st: string) => Number(statusCounts.find((c) => c.status === st)?.n ?? 0);
+  const tabs: [string, string, number][] = [["", "All", count("published") + count("draft")], ["published", "Published", count("published")], ["draft", "Drafts", count("draft")], ["trash", "Trash", count("trash")]];
+  const qs = new URLSearchParams(Object.entries(sp).filter(([k, v]) => v && k !== "page") as [string, string][]);
+  const pages = Math.ceil(Number(total) / per);
+  return (
+    <>
+      <FlashToast />
+      <PageHeader title="Products" subtitle={`${total} products`} actions={<>
+        <Link href="/admin/products/import/" className="btn-outline h-10 text-sm">Import / export</Link>
+        <Link href="/admin/products/new/" className="btn-primary h-10 text-sm">+ Add product</Link>
+      </>} />
+      <nav className="mb-3 flex flex-wrap gap-1 text-sm">
+        {tabs.map(([v, label, n]) => (
+          <Link key={v} href={v ? `/admin/products/?status=${v}` : "/admin/products/"}
+            className={`rounded-form px-3 py-1.5 font-medium ${(sp.status ?? "") === v ? "bg-ink text-white" : "text-ink-soft hover:bg-surface"}`}>
+            {label} <span className="opacity-70">({n})</span>
+          </Link>
+        ))}
+      </nav>
+      {inTrash && <p className="mb-3 text-sm text-ink-soft">Products in the trash are hidden from the store and deleted permanently after {TRASH_DAYS} days.</p>}
+      <form className="mb-4 flex flex-wrap gap-2">
+        <input name="q" defaultValue={sp.q} placeholder="Search name or SKU…" className="field h-10 w-60 text-sm" />
+        <select name="cat" defaultValue={sp.cat} className="field h-10 w-52 text-sm"><option value="">All categories</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.parentId ? "— " : ""}{c.name}</option>)}</select>
+        {sp.status && <input type="hidden" name="status" value={sp.status} />}
+        <select name="stock" defaultValue={sp.stock} className="field h-10 w-40 text-sm"><option value="">Any stock</option><option value="instock">In stock</option><option value="outofstock">Out of stock</option><option value="onbackorder">Backorder</option><option value="low">Low stock</option></select>
+        <select name="sort" defaultValue={sp.sort} className="field h-10 w-40 text-sm"><option value="">Newest</option><option value="name">Name A–Z</option><option value="price">Price ↑</option><option value="price-desc">Price ↓</option><option value="sales">Best selling</option><option value="stock">Stock ↑</option></select>
+        <button className="btn-outline h-10 text-sm">Filter</button>
+        {qs.toString() && <Link href="/admin/products/" className="self-center text-sm text-ink-soft hover:underline">Reset</Link>}
+      </form>
+      {rows.length === 0 ? <Empty>{inTrash ? "The trash is empty." : "No products found."}</Empty> : (
+        <form action={bulkProducts}>
+          <input type="hidden" name="qs" value={qs.toString()} />
+          <BulkBar options={inTrash ? [["restore", "Restore"], ["delete", "Delete permanently"]]
+            : [["publish", "Publish"], ["draft", "Set to draft"], ["instock", "Mark in stock"], ["outofstock", "Mark out of stock"], ["feature", "Feature"], ["unfeature", "Unfeature"], ["trash", "Move to trash"]]} />
+          <Table head={<><th className={`${th} w-8`}><input type="checkbox" data-select-all className="accent-primary" aria-label="Select all" /></th><th className={th} colSpan={2}>Product</th><th className={th}>SKU</th><th className={th}>Stock</th><th className={th}>Price</th><th className={th}>Category</th><th className={th}>Status</th></>}>
+            {rows.map(({ p, image, cat }) => {
+              const pr = effectivePrice(p);
+              return (
+                <tr key={p.id} className="hover:bg-surface/60">
+                  <td className={td}><input type="checkbox" name="sel" value={p.id} className="accent-primary" aria-label={`Select ${p.name}`} /></td>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <td className={`${td} w-14`}>{image ? <img src={image} alt="" className="h-11 w-11 rounded border border-line object-contain" /> : <div className="h-11 w-11 rounded bg-surface" />}</td>
+                  <td className={td}><Link href={`/admin/products/${p.id}/`} className="font-semibold hover:text-primary">{p.name}</Link>{p.featured && <span className="ml-2 text-amber-500" title="Featured">★</span>}{p.type === "bundle" && <Badge className="ml-2 bg-indigo-100 text-indigo-800">Bundle</Badge>}
+                    <div className="mt-0.5 flex gap-3 text-xs text-ink-muted"><span>ID {p.id}</span><a href={`/product/${p.slug}/`} target="_blank" className="hover:text-primary">View</a></div></td>
+                  <td className={`${td} text-ink-soft`}>{p.sku || "–"}</td>
+                  <td className={td}><span className={p.stockStatus === "outofstock" ? "text-danger" : p.stockStatus === "onbackorder" ? "text-amber-600" : "text-success"}>{p.stockStatus === "outofstock" ? "Out of stock" : p.stockStatus === "onbackorder" ? "Backorder" : "In stock"}</span>{p.manageStock && <span className="text-ink-muted"> ({p.stockQty})</span>}</td>
+                  <td className={td}>{pr.onSale ? <><del className="text-xs text-ink-muted">{money(pr.regularPrice)}</del> {money(pr.price)}</> : money(pr.price)}</td>
+                  <td className={`${td} text-ink-soft`}>{cat || "–"}</td>
+                  <td className={td}>{p.status === "published" ? <Badge className="bg-green-100 text-green-800">Published</Badge> : p.status === "trash" ? <>
+                    <Badge className="bg-red-100 text-red-700">Trash</Badge>
+                    {p.trashedAt && <div className="mt-1 text-xs text-ink-muted">Deleted for good in {Math.max(0, TRASH_DAYS - Math.floor((Date.now() - p.trashedAt.getTime()) / 86_400_000))} days</div>}
+                  </> : <Badge>Draft</Badge>}</td>
+                </tr>
+              );
+            })}
+          </Table>
+        </form>
+      )}
+      <Pagination page={page} pages={pages} href={(n) => `/admin/products/?${new URLSearchParams({ ...Object.fromEntries(qs), page: String(n) })}`} />
+    </>
+  );
+}

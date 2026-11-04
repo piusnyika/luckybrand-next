@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-white font-sans text-ink antialiased; letter-spacing: -0.01em; }
+  h1, h2, h3, h4 { letter-spacing: -0.01em; }
+  input, select, textarea, button { font: inherit; letter-spacing: inherit; }
+}
+@layer components {
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-form px-5 text-[15px] font-semibold transition disabled:opacity-60; height: 46px; }
+  .btn-primary { @apply btn bg-primary text-white hover:bg-primary-700; }
+  .btn-outline { @apply btn border border-line bg-white text-ink hover:border-primary hover:text-primary; }
+  .field { @apply block w-full rounded-form border border-line bg-white px-4 text-[15px] font-medium outline-none transition focus:border-primary; height: 46px; }
+  textarea.field { height: auto; @apply py-3; }
+  .label { @apply mb-1.5 block text-sm font-medium text-ink; }
+  .prose-lb { @apply text-[15px] leading-[1.7] text-ink-soft; }
+  .prose-lb h1, .prose-lb h2, .prose-lb h3, .prose-lb h4 { @apply mb-3 mt-6 font-semibold text-ink; }
+  .prose-lb h1 { @apply text-3xl; } .prose-lb h2 { @apply text-2xl; } .prose-lb h3 { @apply text-xl; } .prose-lb h4 { @apply text-lg; }
+  .prose-lb p { @apply mb-4; }
+  .prose-lb ul { @apply mb-4 list-disc pl-6; } .prose-lb ol { @apply mb-4 list-decimal pl-6; }
+  .prose-lb li { @apply mb-1; }
+  .prose-lb a { @apply text-primary underline-offset-2 hover:underline; }
+  .prose-lb strong { @apply font-semibold text-ink; }
+  .prose-lb img { @apply my-4 h-auto max-w-full rounded-base; }
+  .prose-lb table { @apply mb-6 w-full border-collapse text-sm; }
+  .prose-lb td, .prose-lb th { @apply border border-line px-3 py-2 text-left align-top text-ink; }
+  .prose-lb tr:nth-child(even) td { @apply bg-surface; }
+  .prose-lb table[width] { width: 100% !important; }
+  .prose-lb td[width] { width: auto !important; }
+}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+@keyframes lb-pop { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+.ico { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ico-brand { fill: currentColor; }

@@ -1,0 +1,11 @@
+node_modules
+.next
+.env.local
+.env.docker
+*.log
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+# Prisma / local Postgres
+deploy/.env
+*.tsbuildinfo
