@@ -1,7 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSetting, type HomepageSettings } from "@/lib/settings";
+import { getSetting, getSite, type HomepageSettings } from "@/lib/settings";
+import { jsonLd } from "@/lib/format";
 import { listProducts } from "@/lib/catalog";
 import { HeroSlider } from "@/components/store/HeroSlider";
 import { Carousel } from "@/components/store/Carousel";
@@ -14,7 +15,17 @@ export const revalidate = 300;
 export default async function Home({ searchParams }: { searchParams: Promise<Record<string, string>> }) {
   const sp = await searchParams;
   if (sp.s !== undefined) redirect(`/shop/?s=${encodeURIComponent(sp.s)}`); // old WordPress search URLs
-  const home = await getSetting<HomepageSettings>("homepage");
+  const [home, site] = await Promise.all([getSetting<HomepageSettings>("homepage"), getSite()]);
+  const base = process.env.SITE_URL || "";
+  // who we are (Google's knowledge panel) and the search box Google can show under the site in results
+  const ld = [
+    { "@context": "https://schema.org", "@type": "Store", name: site.name, url: base + "/", ...(site.logo ? { logo: base + site.logo, image: base + site.logo } : {}),
+      ...(site.email ? { email: site.email } : {}), ...(site.phones[0] ? { telephone: site.phones[0].tel } : {}),
+      ...(site.address ? { address: { "@type": "PostalAddress", streetAddress: site.address, addressCountry: "ZW" } } : {}),
+      sameAs: site.social.map((s) => s.url).filter(Boolean) },
+    { "@context": "https://schema.org", "@type": "WebSite", name: site.name, url: base + "/",
+      potentialAction: { "@type": "SearchAction", target: { "@type": "EntryPoint", urlTemplate: `${base}/shop/?s={search_term_string}` }, "query-input": "required name=search_term_string" } },
+  ];
 
   const sections = await Promise.all(home.sections.map(async (sec) => {
     if (sec.type === "promo-banner") return { sec, items: [] };
@@ -25,6 +36,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Rec
 
   return (
     <div className="container">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(ld) }} />
       <div className="grid gap-[30px] pt-5 lg:grid-cols-[270px_1fr] lg:pt-[30px]">
         <div className="hidden lg:block" />
         <HeroSlider slides={home.slides} />

@@ -1,4 +1,5 @@
 import { requireStaff } from "@/lib/auth";
+import { getSite } from "@/lib/settings";
 import { notFound } from "next/navigation";
 import { getAllCategories, productRelations } from "@/lib/catalog";
 import { PageHeader, FlashToast, ConfirmButton, SubmitButton } from "@/components/admin/ui";
@@ -39,7 +40,7 @@ export default async function EditProduct({ params }: { params: Promise<{ id: st
           </form>
         </div>
       )}
-      <ProductForm action={saveProduct} deleteAction={trashProduct} product={p ? {
+      <ProductForm titleSuffix={` – ${(await getSite()).name}`} action={saveProduct} deleteAction={trashProduct} product={p ? {
         ...p, regularPrice: String(p.regularPrice), salePrice: p.salePrice ? String(p.salePrice) : "",
         saleFrom: p.saleFrom ? p.saleFrom.toISOString().slice(0, 10) : "", saleTo: p.saleTo ? p.saleTo.toISOString().slice(0, 10) : "",
       } : null}

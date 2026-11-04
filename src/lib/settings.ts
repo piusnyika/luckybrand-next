@@ -52,6 +52,13 @@ export type NotificationSettings = {
   /** paid-order alerts on WhatsApp (Meta WhatsApp Cloud API; token and phone number id in the server's env) */
   whatsapp: boolean; whatsappTo: string[]; whatsappTemplate: string; whatsappLanguage: string;
 };
+/** Admin → SEO */
+export type SeoSettings = {
+  /** Claude model that writes SEO titles, descriptions and keywords */
+  aiModel: string;
+  /** Google Search Console / Bing Webmaster verification codes (the content="…" part of their meta tag) */
+  googleVerification: string; bingVerification: string;
+};
 export type HomeSection =
   | { type: "product-carousel" | "product-grid"; title: string; linkLabel: string; link: string; source: "latest" | "featured" | "on_sale" | "best_selling" | "random"; categoryIds: number[]; limit: number; hideOutOfStock: boolean; banner: null | { image: string; title: string; subtitle: string; text: string; link: string } }
   | { type: "promo-banner"; title: string; html: string; buttonLabel: string; link: string; image: string; background: string };
@@ -79,6 +86,7 @@ const DEFAULTS: Record<string, any> = {
     whatsapp: false, whatsappTo: [], whatsappTemplate: "new_order_alert", whatsappLanguage: "en",
   } satisfies NotificationSettings,
   orderSequence: { next: 10000 },
+  seo: { aiModel: "claude-opus-5-5", googleVerification: "", bingVerification: "" } satisfies SeoSettings,
 };
 
 export const getSetting = cache(async <T = any>(key: string): Promise<T> => {

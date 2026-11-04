@@ -4,8 +4,9 @@ import { MediaModal } from "./MediaPicker";
 
 const BTN = "rounded px-2 py-1 text-xs font-semibold hover:bg-white";
 /** Lightweight WYSIWYG editor with an HTML source view. Value is posted through a hidden input. */
-export function RichText({ name, defaultValue = "", minHeight = 220 }: { name: string; defaultValue?: string | null; minHeight?: number }) {
-  const [html, setHtml] = useState(defaultValue || "");
+export function RichText({ name, defaultValue = "", minHeight = 220, onChange }: { name: string; defaultValue?: string | null; minHeight?: number; onChange?: (html: string) => void }) {
+  const [html, setHtmlState] = useState(defaultValue || "");
+  const setHtml = (v: string) => { setHtmlState(v); onChange?.(v); };
   const [source, setSource] = useState(false);
   const [media, setMedia] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

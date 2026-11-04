@@ -1,4 +1,6 @@
 import { requireStaff } from "@/lib/auth";
+import { analyzeProduct, gradeColor } from "@/lib/seo-score";
+import { getSite } from "@/lib/settings";
 import Link from "next/link";
 import { descendantIds, getAllCategories, effectivePrice } from "@/lib/catalog";
 import { money } from "@/lib/format";
@@ -27,8 +29,9 @@ export default async function Products({ searchParams }: { searchParams: Promise
   const orders: Record<string, Prisma.ProductOrderByWithRelationInput> = { name: { name: "asc" }, price: { regularPrice: "asc" }, "price-desc": { regularPrice: "desc" }, sales: { totalSales: "desc" }, stock: { stockQty: { sort: "asc", nulls: "first" } } };
   const order = orders[sp.sort || ""] ?? { id: "desc" };
   const cond: Prisma.ProductWhereInput = { AND: where };
+  const titleSuffix = ` – ${(await getSite()).name}`;
   const [rows, total, cats, statusCounts] = await Promise.all([
-    prisma.product.findMany({ where: cond, orderBy: order, take: per, skip: (page - 1) * per, include: { image: { select: { url: true } }, primaryCategory: { select: { name: true } } } })
+    prisma.product.findMany({ where: cond, orderBy: order, take: per, skip: (page - 1) * per, include: { image: { select: { url: true } }, primaryCategory: { select: { name: true } }, _count: { select: { images: true, categories: true } } } })
       .then((r) => r.map(({ image, primaryCategory, ...p }) => ({ p, image: image?.url ?? null, cat: primaryCategory?.name ?? null }))),
     prisma.product.count({ where: cond }), getAllCategories(),
     prisma.product.groupBy({ by: ["status"], _count: { _all: true } }),
@@ -67,7 +70,7 @@ export default async function Products({ searchParams }: { searchParams: Promise
           <input type="hidden" name="qs" value={qs.toString()} />
           <BulkBar options={inTrash ? [["restore", "Restore"], ["delete", "Delete permanently"]]
             : [["publish", "Publish"], ["draft", "Set to draft"], ["instock", "Mark in stock"], ["outofstock", "Mark out of stock"], ["feature", "Feature"], ["unfeature", "Unfeature"], ["trash", "Move to trash"]]} />
-          <Table head={<><th className={`${th} w-8`}><input type="checkbox" data-select-all className="accent-primary" aria-label="Select all" /></th><th className={th} colSpan={2}>Product</th><th className={th}>SKU</th><th className={th}>Stock</th><th className={th}>Price</th><th className={th}>Category</th><th className={th}>Status</th></>}>
+          <Table head={<><th className={`${th} w-8`}><input type="checkbox" data-select-all className="accent-primary" aria-label="Select all" /></th><th className={th} colSpan={2}>Product</th><th className={th}>SKU</th><th className={th}>Stock</th><th className={th}>Price</th><th className={th}>Category</th><th className={th} title="SEO score out of 100">SEO</th><th className={th}>Status</th></>}>
             {rows.map(({ p, image, cat }) => {
               const pr = effectivePrice(p);
               return (
@@ -81,6 +84,10 @@ export default async function Products({ searchParams }: { searchParams: Promise
                   <td className={td}><span className={p.stockStatus === "outofstock" ? "text-danger" : p.stockStatus === "onbackorder" ? "text-amber-600" : "text-success"}>{p.stockStatus === "outofstock" ? "Out of stock" : p.stockStatus === "onbackorder" ? "Backorder" : "In stock"}</span>{p.manageStock && <span className="text-ink-muted"> ({p.stockQty})</span>}</td>
                   <td className={td}>{pr.onSale ? <><del className="text-xs text-ink-muted">{money(pr.regularPrice)}</del> {money(pr.price)}</> : money(pr.price)}</td>
                   <td className={`${td} text-ink-soft`}>{cat || "–"}</td>
+                  <td className={td}>{(() => { const s = analyzeProduct({ name: p.name, slug: p.slug, seoTitle: p.seoTitle, seoDescription: p.seoDescription ?? "", focusKeyword: p.focusKeyword,
+                    shortDescription: p.shortDescription ?? "", description: p.description ?? "", specification: p.specification ?? "", attributeCount: p.attributes?.length ?? 0,
+                    imageCount: Math.max(p._count.images, p.imageId ? 1 : 0), imagesWithoutAlt: 0, categoryCount: p._count.categories, titleSuffix });
+                    return <Link href={`/admin/products/${p.id}/#seo`} title={s.checks.find((c) => c.status === "bad")?.tip ?? "SEO score"}><Badge className={gradeColor(s.grade)}>{s.score}</Badge></Link>; })()}</td>
                   <td className={td}>{p.status === "published" ? <Badge className="bg-green-100 text-green-800">Published</Badge> : p.status === "trash" ? <>
                     <Badge className="bg-red-100 text-red-700">Trash</Badge>
                     {p.trashedAt && <div className="mt-1 text-xs text-ink-muted">Deleted for good in {Math.max(0, TRASH_DAYS - Math.floor((Date.now() - p.trashedAt.getTime()) / 86_400_000))} days</div>}

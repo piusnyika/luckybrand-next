@@ -16,11 +16,12 @@ import { getCurrentUser } from "@/lib/auth";
 import { productReviews } from "@/lib/reviews";
 import { Reviews } from "@/components/store/Reviews";
 import { Stars } from "@/components/store/Stars";
+import { autoDescription } from "@/lib/seo-score";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const p = await getProductBySlug(decodeURIComponent((await params).slug));
   if (!p) return {};
-  const desc = p.seoDescription || stripHtml(p.shortDescription || p.description).slice(0, 160);
+  const desc = p.seoDescription || autoDescription(p.name, p.shortDescription || p.description || "", (await getSite()).name);
   return {
     title: p.seoTitle?.replace(/%%[^%]+%%/g, "").replace(/\s+[-|–]\s*$/, "").trim() || p.name, description: desc,
     alternates: { canonical: `/product/${p.slug}/` },
@@ -55,7 +56,9 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
     "@context": "https://schema.org", "@type": "Product", name: p.name, sku: p.sku || undefined,
     image: p.gallery.map((g) => base + g.url), description: stripHtml(p.shortDescription || p.description).slice(0, 500),
     brand: p.brandList[0] ? { "@type": "Brand", name: p.brandList[0].name } : undefined,
-    offers: { "@type": "Offer", url, priceCurrency: site.currency, price: price.toFixed(2),
+    offers: { "@type": "Offer", url, priceCurrency: site.currency, price: price.toFixed(2), seller: { "@type": "Organization", name: site.name },
+      // Google wants an end date for the price: the sale's end, else a year ahead
+      priceValidUntil: (!bundle && p.onSale && p.saleTo ? p.saleTo : new Date(Date.now() + 365 * 86_400_000)).toISOString().slice(0, 10),
       availability: stockStatus === "outofstock" ? "https://schema.org/OutOfStock" : "https://schema.org/InStock", itemCondition: "https://schema.org/NewCondition" },
     // star ratings in Google results
     ...(rev.count ? {

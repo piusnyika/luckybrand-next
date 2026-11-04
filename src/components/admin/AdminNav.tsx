@@ -19,6 +19,7 @@ const GROUPS: { title?: string; items: { href: string; label: string; icon: stri
     { href: "/admin/brands/", label: "Brands & tags", icon: "star" },
     { href: "/admin/media/", label: "Media library", icon: "image" },
     { href: "/admin/reviews/", label: "Reviews", icon: "star", badge: "reviews" },
+    { href: "/admin/seo/", label: "SEO", icon: "search" },
   ] },
   { title: "Content", items: [
     { href: "/admin/homepage/", label: "Homepage", icon: "layout" },

@@ -5,6 +5,7 @@ import { MediaModal } from "./MediaPicker";
 import { SubmitButton, ConfirmButton } from "./ui-client";
 import { Icon } from "../Icon";
 import { BundleEditor, type BundleRow } from "./BundleEditor";
+import { SeoPanel } from "./SeoPanel";
 
 type Opt = { id: number; name: string; parentId?: number | null };
 type P = Record<string, any> | null;
@@ -14,8 +15,8 @@ const Card = ({ title, children }: { title: string; children: React.ReactNode })
 );
 const F = ({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) => <label className="block"><span className="label">{label}</span>{children}{hint && <span className="mt-1 block text-xs text-ink-muted">{hint}</span>}</label>;
 
-export function ProductForm({ action, deleteAction, product: p, images: initImages, categories, brands, tags, selectedCats, selectedBrands, selectedTags, bundleItems = [] }: {
-  action: (fd: FormData) => void; deleteAction: (fd: FormData) => void; product: P; images: { id: number; url: string }[]; bundleItems?: BundleRow[];
+export function ProductForm({ action, deleteAction, product: p, images: initImages, categories, brands, tags, selectedCats, selectedBrands, selectedTags, bundleItems = [], titleSuffix = "" }: {
+  action: (fd: FormData) => void; deleteAction: (fd: FormData) => void; product: P; images: { id: number; url: string; alt?: string }[]; bundleItems?: BundleRow[]; titleSuffix?: string;
   categories: Opt[]; brands: Opt[]; tags: Opt[]; selectedCats: number[]; selectedBrands: number[]; selectedTags: number[];
 }) {
   const [images, setImages] = useState(initImages);
@@ -27,6 +28,12 @@ export function ProductForm({ action, deleteAction, product: p, images: initImag
   const [attrs, setAttrs] = useState<{ name: string; values: string }[]>((p?.attributes ?? []).map((a: { name: string; values: string[] }) => ({ name: a.name, values: a.values.join(" | ") })));
   const [catFilter, setCatFilter] = useState("");
   const [seoTitle, setSeoTitle] = useState(p?.seoTitle ?? ""); const [seoDesc, setSeoDesc] = useState(p?.seoDescription ?? ""); const [name, setName] = useState(p?.name ?? "");
+  // live SEO score: the editors report their HTML; an AI rewrite remounts them with the new text (copyKey)
+  const [keyword, setKeyword] = useState<string>(p?.focusKeyword ?? "");
+  const [shortHtml, setShortHtml] = useState<string>(p?.shortDescription ?? ""); const [descHtml, setDescHtml] = useState<string>(p?.description ?? ""); const [specHtml, setSpecHtml] = useState<string>(p?.specification ?? "");
+  const [copyKey, setCopyKey] = useState(0);
+  const [slug, setSlug] = useState<string>(p?.slug ?? "");
+  const attrList = attrs.filter((a) => a.name.trim()).map((a) => ({ name: a.name.trim(), values: a.values.split("|").map((v) => v.trim()).filter(Boolean) }));
   const tree = useMemo(() => {
     const out: (Opt & { depth: number })[] = [];
     const walk = (parent: number | null, depth: number) => categories.filter((c) => (c.parentId ?? null) === parent).sort((a, b) => a.name.localeCompare(b.name)).forEach((c) => { out.push({ ...c, depth }); walk(c.id, depth + 1); });
@@ -53,10 +60,10 @@ export function ProductForm({ action, deleteAction, product: p, images: initImag
         </Card>
         <Card title="General">
           <F label="Product name *"><input name="name" required value={name} onChange={(e) => setName(e.target.value)} className="field" /></F>
-          <F label="URL slug" hint="Leave blank to generate from the name. Changing it changes the product URL."><div className="flex items-center"><span className="flex h-[46px] items-center rounded-l-form border border-r-0 border-line bg-surface px-3 text-sm text-ink-muted">/product/</span><input name="slug" defaultValue={p?.slug} className="field rounded-l-none" /></div></F>
-          <F label="Short description"><RichText name="shortDescription" defaultValue={p?.shortDescription} minHeight={100} /></F>
-          <F label="Description"><RichText name="description" defaultValue={p?.description} minHeight={260} /></F>
-          <F label="Specification table (optional)" hint="Shown in its own “Specifications” tab next to Description, together with the attributes below. Paste a table or use the Table button."><RichText name="specification" defaultValue={p?.specification} minHeight={120} /></F>
+          <F label="URL slug" hint="Leave blank to generate from the name. Changing it changes the product URL."><div className="flex items-center"><span className="flex h-[46px] items-center rounded-l-form border border-r-0 border-line bg-surface px-3 text-sm text-ink-muted">/product/</span><input name="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className="field rounded-l-none" /></div></F>
+          <F label="Short description"><RichText key={"s" + copyKey} name="shortDescription" defaultValue={shortHtml} onChange={setShortHtml} minHeight={100} /></F>
+          <F label="Description"><RichText key={"d" + copyKey} name="description" defaultValue={descHtml} onChange={setDescHtml} minHeight={260} /></F>
+          <F label="Specification table (optional)" hint="Shown in its own “Specifications” tab next to Description, together with the attributes below. Paste a table or use the Table button."><RichText name="specification" defaultValue={p?.specification} onChange={setSpecHtml} minHeight={120} /></F>
         </Card>
         <Card title="Images">
           <div className="flex flex-wrap gap-3">
@@ -109,15 +116,24 @@ export function ProductForm({ action, deleteAction, product: p, images: initImag
           ))}
           <button type="button" onClick={() => setAttrs([...attrs, { name: "", values: "" }])} className="text-sm font-semibold text-primary">+ Add attribute</button>
         </Card>
+        <div id="seo" className="scroll-mt-20" />
         <Card title="Search engine (SEO)">
           <F label="SEO title" hint={`${(seoTitle || name).length} characters — aim for under 60.`}><input name="seoTitle" value={seoTitle} onChange={(e) => setSeoTitle(e.target.value)} placeholder={name} className="field" /></F>
           <F label="Meta description" hint={`${seoDesc.length} characters — aim for 120–160.`}><textarea name="seoDescription" rows={3} value={seoDesc} onChange={(e) => setSeoDesc(e.target.value)} className="field" /></F>
-          <F label="Focus keyword"><input name="focusKeyword" defaultValue={p?.focusKeyword} className="field" /></F>
+          <F label="Focus keyword" hint="The phrase customers would search for to find this product."><input name="focusKeyword" value={keyword} onChange={(e) => setKeyword(e.target.value)} className="field" /></F>
           <div className="rounded-form bg-surface p-4 text-sm">
-            <div className="truncate text-[#1a0dab]">{seoTitle || name || "Product title"}</div>
-            <div className="text-xs text-green-700">/product/{p?.slug || "…"}/</div>
+            <div className="truncate text-[#1a0dab]">{(seoTitle || name || "Product title") + titleSuffix}</div>
+            <div className="text-xs text-green-700">/product/{slug || p?.slug || "…"}/</div>
             <div className="line-clamp-2 text-xs text-ink-soft">{seoDesc || "Meta description will appear here."}</div>
           </div>
+          <SeoPanel productId={p?.id} attributes={attrList}
+            input={{ name, slug: slug || name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""), seoTitle, seoDescription: seoDesc, focusKeyword: keyword,
+              shortDescription: shortHtml, description: descHtml, specification: specHtml, attributeCount: attrList.length,
+              imageCount: images.length, imagesWithoutAlt: images.filter((i) => i.alt !== undefined && !i.alt.trim()).length, categoryCount: cats.length, titleSuffix }}
+            onSuggest={(s) => {
+              setKeyword(s.focusKeyword); setSeoTitle(s.seoTitle); setSeoDesc(s.metaDescription);
+              if (s.description) { setDescHtml(s.description); setShortHtml(s.shortDescription ?? shortHtml); setCopyKey((k) => k + 1); }
+            }} />
         </Card>
       </div>
 

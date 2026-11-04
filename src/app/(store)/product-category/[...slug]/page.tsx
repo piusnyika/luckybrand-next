@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { categoryPath } from "@/lib/catalog";
-import { stripHtml } from "@/lib/format";
+import { autoDescription } from "@/lib/seo-score";
+import { getSite } from "@/lib/settings";
 import { ShopView, type ShopSearchParams } from "@/components/store/ShopView";
 import { prisma } from "@/lib/prisma";
 
@@ -18,7 +19,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const r = await resolve((await params).slug); if (!r) return {};
   return {
     title: r.cat.seoTitle?.replace(/%%[^%]+%%/g, "").replace(/\s+[-|–]\s*$/, "").trim() || r.cat.name,
-    description: r.cat.seoDescription || stripHtml(r.cat.description).slice(0, 160),
+    description: r.cat.seoDescription || autoDescription(`Shop ${r.cat.name}`, r.cat.description || "", (await getSite()).name),
     alternates: { canonical: r.canonical },
   };
 }
