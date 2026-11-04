@@ -11,7 +11,7 @@ import { money } from "@/lib/format";
 type Init = { firstName: string; lastName: string; company: string; address1: string; address2: string; city: string; state: string; postcode: string; email: string; phone: string };
 type Method = { id: "paynow" | "cod" | "bacs" | "ngenius"; title: string; description: string; details: string; mobile?: boolean };
 /** Econet 077/078 → EcoCash, NetOne 071 → OneMoney (same rule as lib/paynow guessMethod) */
-const networkFor = (phone: string) => { const d = phone.replace(/[^d]/g, "").replace(/^263/, "0"); return /^0?71/.test(d) ? "onemoney" : "ecocash"; };
+const networkFor = (phone: string) => { const d = phone.replace(/\D/g, "").replace(/^263/, "0"); return /^0?71/.test(d) ? "onemoney" : "ecocash"; };
 
 export function CheckoutForm({ initial, methods, loggedIn, google = false }: { initial: Init; methods: Method[]; loggedIn: boolean; google?: boolean }) {
   const { lines, ready, clear } = useCart();
