@@ -1,12 +1,11 @@
 "use server";
 import { redirect } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
 import { requireStaff, refreshStore } from "@/lib/admin/guard";
-import { deleteMedia, deleteMediaMany, mediaWhere } from "@/lib/admin/media";
+import { deleteMedia, deleteMediaMany, mediaIdsWhere, mediaWhere } from "@/lib/admin/media";
+import { prisma } from "@/lib/prisma";
 export async function updateMedia(fd: FormData) {
   await requireStaff(); const id = Number(fd.get("id"));
-  await db.update(s.media).set({ alt: String(fd.get("alt") || ""), title: String(fd.get("title") || "") }).where(eq(s.media.id, id));
+  await prisma.media.update({ where: { id }, data: { alt: String(fd.get("alt") || ""), title: String(fd.get("title") || "") } });
   refreshStore(); redirect(`/admin/media/?id=${id}&msg=Saved`);
 }
 export async function bulkMedia(fd: FormData) {
@@ -14,7 +13,7 @@ export async function bulkMedia(fd: FormData) {
   const qs = String(fd.get("qs") || "");
   // "Select all N files": every file matching the current search/filter, not just this page
   const sel = fd.get("allMatching")
-    ? (await db.select({ id: s.media.id }).from(s.media).where(mediaWhere(String(fd.get("q") || "") || undefined, fd.get("show") === "unused"))).map((r) => r.id)
+    ? await mediaIdsWhere(mediaWhere(String(fd.get("q") || "") || undefined, fd.get("show") === "unused"))
     : fd.getAll("sel").map(Number).filter(Boolean);
   let msg = "Nothing selected";
   if (sel.length && fd.get("bulk") === "delete") {

@@ -1,6 +1,5 @@
 import "server-only";
-import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
-import { db, schema as s } from "@/db";
+import { prisma } from "@/lib/prisma";
 import { setOrderStatus } from "./orders";
 import { poll } from "./paynow";
 import { applyPaynowStatus } from "./paynow-apply";
@@ -19,14 +18,15 @@ const timeoutMinutes = () => Math.max(10, Number(process.env.PAYMENT_TIMEOUT_MIN
 export async function syncPendingPayments() {
   await refreshBundleStock(); // an item's scheduled sale may have started or ended
   const now = Date.now();
-  const rows = await db.select({ id: s.orders.id, status: s.orders.status, method: s.orders.paymentMethod, createdAt: s.orders.createdAt, pollUrl: s.orders.paynowPollUrl, ref: s.orders.transactionId })
-    .from(s.orders)
-    .where(and(
-      inArray(s.orders.paymentMethod, ["paynow", "ngenius"]),
-      gt(s.orders.createdAt, new Date(now - 7 * 86_400_000)),
-      or(eq(s.orders.status, "pending"), and(eq(s.orders.status, "cancelled"), isNull(s.orders.paidAt), gt(s.orders.createdAt, new Date(now - 86_400_000)))),
-    ))
-    .limit(100);
+  const rows = (await prisma.order.findMany({
+    where: {
+      paymentMethod: { in: ["paynow", "ngenius"] },
+      createdAt: { gt: new Date(now - 7 * 86_400_000) },
+      OR: [{ status: "pending" }, { status: "cancelled", paidAt: null, createdAt: { gt: new Date(now - 86_400_000) } }],
+    },
+    select: { id: true, status: true, paymentMethod: true, createdAt: true, paynowPollUrl: true, transactionId: true },
+    take: 100,
+  })).map((o) => ({ id: o.id, status: o.status, method: o.paymentMethod, createdAt: o.createdAt, pollUrl: o.paynowPollUrl, ref: o.transactionId }));
   const out = { checked: 0, paid: 0, failed: 0, timedOut: 0, errors: 0 };
   for (const r of rows) {
     if (now - r.createdAt.getTime() < 60_000) continue; // give fresh checkouts a minute
@@ -35,7 +35,7 @@ export async function syncPendingPayments() {
       else if (r.method === "ngenius" && r.ref) await syncNgeniusOrder(r.id);
       out.checked++;
     } catch (e) { out.errors++; console.error(`payment check, order ${r.id}:`, (e as Error).message); }
-    const after = await db.query.orders.findFirst({ columns: { status: true }, where: eq(s.orders.id, r.id) });
+    const after = await prisma.order.findUnique({ where: { id: r.id }, select: { status: true } });
     if (!after || after.status === r.status) {
       if (after?.status === "pending" && now - r.createdAt.getTime() > timeoutMinutes() * 60_000) {
         await setOrderStatus(r.id, "cancelled", r.method === "ngenius" ? "N-Genius" : "Paynow",

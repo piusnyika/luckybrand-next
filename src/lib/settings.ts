@@ -1,6 +1,5 @@
 import { cache } from "react";
-import { db, schema } from "@/db";
-import { eq } from "drizzle-orm";
+import { prisma, type Prisma } from "@/lib/prisma";
 
 export type SiteSettings = {
   name: string; tagline: string; logo: string; logoWhite?: string | null; favicon?: string | null;
@@ -69,7 +68,7 @@ const DEFAULTS: Record<string, any> = {
 };
 
 export const getSetting = cache(async <T = any>(key: string): Promise<T> => {
-  const row = await db.query.settings.findFirst({ where: eq(schema.settings.key, key) });
+  const row = await prisma.setting.findUnique({ where: { key } });
   const def = DEFAULTS[key];
   if (!row) return def as T;
   if (def && typeof def === "object" && !Array.isArray(def)) return { ...def, ...(row.value as any) } as T;
@@ -78,5 +77,5 @@ export const getSetting = cache(async <T = any>(key: string): Promise<T> => {
 export const getSite = () => getSetting<SiteSettings>("site");
 
 export async function saveSetting(key: string, value: any) {
-  await db.insert(schema.settings).values({ key, value }).onDuplicateKeyUpdate({ set: { value } });
+  await prisma.setting.upsert({ where: { key }, create: { key, value: value as Prisma.InputJsonValue }, update: { value: value as Prisma.InputJsonValue } });
 }

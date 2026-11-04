@@ -1,8 +1,7 @@
 import "server-only";
 import path from "path";
 import { lookup } from "dns/promises";
-import { db, schema as s } from "@/db";
-import { and, asc, eq, like, ne } from "drizzle-orm";
+import { prisma, type Prisma } from "@/lib/prisma";
 import { slugify } from "../format";
 import { saveUpload } from "./media";
 import { parseBundleSpec, formatBundleSpec, resolveBundleItems, setBundleItems, refreshBundleStock } from "../bundles";
@@ -27,7 +26,7 @@ const CLEAR = "-";
 
 export async function uniqueSlug(base: string, exceptId?: number) {
   let slug = slugify(base) || "product"; let n = 2;
-  while (await db.query.products.findFirst({ where: exceptId ? and(eq(s.products.slug, slug), ne(s.products.id, exceptId)) : eq(s.products.slug, slug) })) slug = `${slugify(base)}-${n++}`;
+  while (await prisma.product.findFirst({ where: exceptId ? { slug, id: { not: exceptId } } : { slug }, select: { id: true } })) slug = `${slugify(base)}-${n++}`;
   return slug;
 }
 
@@ -56,15 +55,16 @@ export const toCsv = (rows: unknown[][]) => "﻿" + rows.map((r) => r.map(esc).j
 /* ---------------- export ---------------- */
 export async function exportProductsCsv() {
   const [prods, cats, pc, brs, pb, tgs, pt, imgs] = await Promise.all([
-    db.select().from(s.products).where(ne(s.products.status, "trash")).orderBy(asc(s.products.id)),
-    db.select().from(s.categories), db.select().from(s.productCategories),
-    db.select().from(s.brands), db.select().from(s.productBrands),
-    db.select().from(s.tags), db.select().from(s.productTags),
-    db.select({ productId: s.productImages.productId, url: s.media.url, position: s.productImages.position }).from(s.productImages)
-      .innerJoin(s.media, eq(s.media.id, s.productImages.mediaId)).orderBy(asc(s.productImages.position)),
+    prisma.product.findMany({ where: { status: { not: "trash" } }, orderBy: { id: "asc" } }),
+    prisma.category.findMany(), prisma.productCategory.findMany(),
+    prisma.brand.findMany(), prisma.productBrand.findMany(),
+    prisma.tag.findMany(), prisma.productTag.findMany(),
+    prisma.productImage.findMany({ orderBy: { position: "asc" }, select: { productId: true, position: true, media: { select: { url: true } } } })
+      .then((rows) => rows.map((r) => ({ productId: r.productId, url: r.media.url, position: r.position }))),
   ]);
-  const bundleRows = await db.select({ bundleId: s.productBundleItems.bundleId, productId: s.productBundleItems.productId, qty: s.productBundleItems.qty, sku: s.products.sku })
-    .from(s.productBundleItems).leftJoin(s.products, eq(s.products.id, s.productBundleItems.productId)).orderBy(asc(s.productBundleItems.position));
+  const skuById = new Map(prods.map((p) => [p.id, p.sku]));
+  const bundleRows = (await prisma.productBundleItem.findMany({ orderBy: { position: "asc" } }))
+    .map((b) => ({ bundleId: b.bundleId, productId: b.productId, qty: b.qty, sku: skuById.get(b.productId) ?? null }));
   const pbundle = new Map<number, { sku: string; productId: number; qty: number }[]>();
   for (const b of bundleRows) pbundle.set(b.bundleId, [...(pbundle.get(b.bundleId) ?? []), { sku: b.sku ?? "", productId: b.productId, qty: b.qty }]);
   const catById = new Map(cats.map((c) => [c.id, c]));
@@ -220,18 +220,22 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
     throw new Error("Couldn't find a name, sku, id or slug column. Download the template to see the expected headings.");
 
   const [cats, brands, tags] = await Promise.all([
-    db.select({ id: s.categories.id, name: s.categories.name, slug: s.categories.slug, parentId: s.categories.parentId }).from(s.categories),
-    db.select({ id: s.brands.id, name: s.brands.name, slug: s.brands.slug }).from(s.brands),
-    db.select({ id: s.tags.id, name: s.tags.name, slug: s.tags.slug }).from(s.tags),
+    prisma.category.findMany({ select: { id: true, name: true, slug: true, parentId: true } }),
+    prisma.brand.findMany({ select: { id: true, name: true, slug: true } }),
+    prisma.tag.findMany({ select: { id: true, name: true, slug: true } }),
   ]);
   let fakeId = -1; // stands in for terms that a dry run would create
   const imageCache = new Map<string, Promise<ImageResult>>();
   const seenInFile = new Map<string, number>(); // sku/slug -> product id created earlier in this file (dry run: fake id)
   const report: ImportReport = { dryRun, rows: [], created: 0, updated: 0, skipped: 0, errors: 0, imageErrors: 0, ignoredColumns };
 
-  async function uniqueTermSlug(table: typeof s.categories | typeof s.brands | typeof s.tags, existing: Term[], name: string) {
+  const slugTaken = (kind: "category" | "brand" | "tag", slug: string) =>
+    kind === "category" ? prisma.category.findUnique({ where: { slug }, select: { id: true } })
+      : kind === "brand" ? prisma.brand.findUnique({ where: { slug }, select: { id: true } })
+      : prisma.tag.findUnique({ where: { slug }, select: { id: true } });
+  async function uniqueTermSlug(kind: "category" | "brand" | "tag", existing: Term[], name: string) {
     let slug = slugify(name) || "item"; let n = 2;
-    while (existing.some((t) => t.slug === slug) || (await db.select({ id: table.id }).from(table).where(eq(table.slug, slug)).limit(1)).length) slug = `${slugify(name)}-${n++}`;
+    while (existing.some((t) => t.slug === slug) || (await slugTaken(kind, slug))) slug = `${slugify(name)}-${n++}`;
     return slug;
   }
   async function resolveCategory(pathStr: string, notes: string[]) {
@@ -240,7 +244,7 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
       let c = cats.find((x) => (x.parentId ?? null) === parentId && x.name.toLowerCase() === name.toLowerCase());
       if (!c) {
         if (dryRun) c = { id: fakeId--, name, slug: "", parentId };
-        else { const slug = await uniqueTermSlug(s.categories, cats, name); const [r] = await db.insert(s.categories).values({ name, slug, parentId }).$returningId(); c = { id: r.id, name, slug, parentId }; }
+        else { const slug = await uniqueTermSlug("category", cats, name); const r: { id: number } = await prisma.category.create({ data: { name, slug, parentId }, select: { id: true } }); c = { id: r.id, name, slug, parentId }; }
         cats.push(c); notes.push(`New category “${name}”`);
       }
       parentId = c.id;
@@ -248,11 +252,15 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
     return parentId;
   }
   async function resolveTerm(kind: "brand" | "tag", name: string, notes: string[]) {
-    const pool = kind === "brand" ? brands : tags; const table = kind === "brand" ? s.brands : s.tags;
+    const pool = kind === "brand" ? brands : tags;
     let t = pool.find((x) => x.name.toLowerCase() === name.toLowerCase() || x.slug === slugify(name));
     if (!t) {
       if (dryRun) t = { id: fakeId--, name, slug: slugify(name) };
-      else { const slug = await uniqueTermSlug(table, pool, name); const [r] = await db.insert(table).values({ name, slug }).$returningId(); t = { id: r.id, name, slug }; }
+      else {
+        const slug = await uniqueTermSlug(kind, pool, name);
+        const r: { id: number } = kind === "brand" ? await prisma.brand.create({ data: { name, slug }, select: { id: true } }) : await prisma.tag.create({ data: { name, slug }, select: { id: true } });
+        t = { id: r.id, name, slug };
+      }
       pool.push(t); notes.push(`New ${kind} “${name}”`);
     }
     return t.id;
@@ -266,8 +274,8 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
   async function lookupOrDownload(v: string, alt: string): Promise<ImageResult> {
     let local = v; let remote: URL | null = null;
     try { const u = new URL(v); if (u.protocol === "http:" || u.protocol === "https:") { remote = u; local = decodeURIComponent(u.pathname); } } catch {}
-    let m = local.startsWith("/uploads/") ? await db.query.media.findFirst({ where: eq(s.media.url, local) }) : undefined;
-    if (!m && !local.includes("/")) m = await db.query.media.findFirst({ where: like(s.media.url, `%/${local}`) });
+    let m = local.startsWith("/uploads/") ? await prisma.media.findFirst({ where: { url: local } }) : null;
+    if (!m && !local.includes("/")) m = await prisma.media.findFirst({ where: { url: { endsWith: `/${local}` } } });
     if (m) return { id: m.id };
     if (!remote) return { error: `Image “${v}” not found in the media library` };
     try {
@@ -304,15 +312,15 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
     try {
       // find the existing product: sku, then id, then slug
       const sku = get("sku"); const idv = get("id"); const slugv = get("slug");
-      let existing: typeof s.products.$inferSelect | undefined; let earlierId: number | undefined;
-      if (sku) { existing = await db.query.products.findFirst({ where: eq(s.products.sku, sku) }); earlierId ??= seenInFile.get("sku:" + sku); }
-      if (!existing && idv && /^\d+$/.test(idv)) existing = await db.query.products.findFirst({ where: eq(s.products.id, Number(idv)) });
-      if (!existing && slugv) { existing = await db.query.products.findFirst({ where: eq(s.products.slug, slugify(slugv)) }); earlierId ??= seenInFile.get("slug:" + slugify(slugv)); }
+      let existing: Awaited<ReturnType<typeof prisma.product.findFirst>> = null; let earlierId: number | undefined;
+      if (sku) { existing = await prisma.product.findFirst({ where: { sku } }); earlierId ??= seenInFile.get("sku:" + sku); }
+      if (!existing && idv && /^\d+$/.test(idv)) existing = await prisma.product.findUnique({ where: { id: Number(idv) } });
+      if (!existing && slugv) { existing = await prisma.product.findUnique({ where: { slug: slugify(slugv) } }); earlierId ??= seenInFile.get("slug:" + slugify(slugv)); }
       const isUpdate = !!existing || earlierId !== undefined;
       if (!isUpdate && !get("name")) { notes.push("Name is required for a new product (no existing product matched this row's SKU / ID / slug)."); push("error"); continue; }
 
       const errs: string[] = [];
-      const patch: Partial<typeof s.products.$inferInsert> = {};
+      const patch: Partial<Prisma.ProductUncheckedCreateInput> = {};
       const trashed = existing?.status === "trash";
       if (trashed) notes.push(get("status") ? "Was in the trash; restored by the status column." : "This product is in the trash. It was updated but stays in the trash (add a status column to restore it).");
       const money = (c: Col) => {
@@ -335,7 +343,7 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
 
       if (get("name")) patch.name = get("name")!;
       if (sku && existing && existing.sku !== sku) {
-        const clash = await db.query.products.findFirst({ where: and(eq(s.products.sku, sku), ne(s.products.id, existing.id)) });
+        const clash = await prisma.product.findFirst({ where: { sku, id: { not: existing.id } } });
         if (clash) errs.push(`SKU ${sku} is already used by “${clash.name}”${clash.status === "trash" ? " (in the trash)" : ""}`); else patch.sku = sku;
       } else if (sku && !isUpdate) patch.sku = sku;
 
@@ -433,18 +441,19 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
         if (!isUpdate) { const fake = fakeId--; if (sku) seenInFile.set("sku:" + sku, fake); if (patch.slug) seenInFile.set("slug:" + patch.slug, fake); }
         push(isUpdate ? "update" : "create", productName); continue;
       }
-      const pid = await db.transaction(async (tx) => {
+      const pid = await prisma.$transaction(async (tx) => {
         let id = existing?.id;
-        if (id) { if (Object.keys(patch).length) await tx.update(s.products).set(patch).where(eq(s.products.id, id)); }
-        else { const [r] = await tx.insert(s.products).values(patch as typeof s.products.$inferInsert).$returningId(); id = r.id; }
-        if (catIds) { await tx.delete(s.productCategories).where(eq(s.productCategories.productId, id)); if (catIds.length) await tx.insert(s.productCategories).values(catIds.map((c) => ({ productId: id!, categoryId: c }))); }
-        if (brandIds) { await tx.delete(s.productBrands).where(eq(s.productBrands.productId, id)); if (brandIds.length) await tx.insert(s.productBrands).values(brandIds.map((b) => ({ productId: id!, brandId: b }))); }
-        if (tagIds) { await tx.delete(s.productTags).where(eq(s.productTags.productId, id)); if (tagIds.length) await tx.insert(s.productTags).values(tagIds.map((t) => ({ productId: id!, tagId: t }))); }
-        if (imageIds) { await tx.delete(s.productImages).where(eq(s.productImages.productId, id)); if (imageIds.length) await tx.insert(s.productImages).values(imageIds.map((m, i) => ({ productId: id!, mediaId: m, position: i }))); }
-        return id;
+        if (id) { if (Object.keys(patch).length) await tx.product.update({ where: { id }, data: patch }); }
+        else id = (await tx.product.create({ data: patch as Prisma.ProductUncheckedCreateInput, select: { id: true } })).id;
+        const pid = id;
+        if (catIds) { await tx.productCategory.deleteMany({ where: { productId: pid } }); if (catIds.length) await tx.productCategory.createMany({ data: catIds.map((c) => ({ productId: pid, categoryId: c })) }); }
+        if (brandIds) { await tx.productBrand.deleteMany({ where: { productId: pid } }); if (brandIds.length) await tx.productBrand.createMany({ data: brandIds.map((b) => ({ productId: pid, brandId: b })) }); }
+        if (tagIds) { await tx.productTag.deleteMany({ where: { productId: pid } }); if (tagIds.length) await tx.productTag.createMany({ data: tagIds.map((t) => ({ productId: pid, tagId: t })) }); }
+        if (imageIds) { await tx.productImage.deleteMany({ where: { productId: pid } }); if (imageIds.length) await tx.productImage.createMany({ data: imageIds.map((m, i) => ({ productId: pid, mediaId: m, position: i })) }); }
+        return pid;
       });
-      if (!existing) { const created = await db.query.products.findFirst({ where: eq(s.products.id, pid) }); if (created?.sku) seenInFile.set("sku:" + created.sku, pid); if (created) seenInFile.set("slug:" + created.slug, pid); }
-      if (bundleSpec === null) await db.delete(s.productBundleItems).where(eq(s.productBundleItems.bundleId, pid!));
+      if (!existing) { const created = await prisma.product.findUnique({ where: { id: pid }, select: { sku: true, slug: true } }); if (created?.sku) seenInFile.set("sku:" + created.sku, pid); if (created) seenInFile.set("slug:" + created.slug, pid); }
+      if (bundleSpec === null) await prisma.productBundleItem.deleteMany({ where: { bundleId: pid } });
       else if (bundleSpec) { const errors = await setBundleItems(pid!, bundleSpec); if (errors.length) notes.push(...errors.map((e) => `bundle_items: ${e}`)); }
       touched.push(pid!);
       push(existing ? "update" : "create", productName);

@@ -5,5 +5,7 @@ storage
 .env*
 *.log
 *.tsbuildinfo
-Dockerfile
-docker-compose*.yml
+deploy/Dockerfile
+deploy/docker-compose*.yml
+deploy/.env
+prisma/dev.db

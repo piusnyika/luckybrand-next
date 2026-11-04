@@ -4,8 +4,6 @@ import { notFound } from "next/navigation";
 import { getProductBySlug, relatedProducts, categoryPath, categoryUrlMap } from "@/lib/catalog";
 import { getSite } from "@/lib/settings";
 import { money, stripHtml, jsonLd } from "@/lib/format";
-import { db, schema as s } from "@/db";
-import { eq, sql } from "drizzle-orm";
 import { Breadcrumbs } from "@/components/store/Breadcrumbs";
 import { Gallery } from "@/components/store/Gallery";
 import { BuyBox } from "@/components/store/BuyBox";
@@ -13,6 +11,7 @@ import { ProductCard } from "@/components/store/ProductCard";
 import { ProductTabs } from "@/components/store/ProductTabs";
 import { getBundleItems, bundleMaxQty, bundlePrice } from "@/lib/bundles";
 import { Icon } from "@/components/Icon";
+import { prisma } from "@/lib/prisma";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const p = await getProductBySlug(decodeURIComponent((await params).slug));
@@ -28,7 +27,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const p = await getProductBySlug(decodeURIComponent((await params).slug));
   if (!p) notFound();
-  db.update(s.products).set({ views: sql`${s.products.views} + 1` }).where(eq(s.products.id, p.id)).catch(() => {});
+  prisma.product.update({ where: { id: p.id }, data: { views: { increment: 1 } }, select: { id: true } }).catch(() => {});
 
   const [site, urls] = await Promise.all([getSite(), categoryUrlMap()]);
   const primary = p.categoryList.find((c) => c.id === p.primaryCategoryId) ?? p.categoryList[0];

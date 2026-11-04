@@ -1,13 +1,12 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { asc } from "drizzle-orm";
 import { PageHeader, Table, th, td, Badge, FlashToast } from "@/components/admin/ui";
 import { formatDate } from "@/lib/format";
+import { prisma } from "@/lib/prisma";
 export const metadata = { title: "Pages" };
 export default async function Pages() {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
-  const rows = await db.select().from(s.pages).orderBy(asc(s.pages.title));
+  const rows = await prisma.page.findMany({ orderBy: { title: "asc" } });
   return (
     <>
       <FlashToast />

@@ -1,8 +1,6 @@
 "use server";
 import { headers } from "next/headers";
 import { z } from "zod";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
 import { quoteCart, createOrder, setOrderStatus, addNote } from "@/lib/orders";
 import { getSetting, type PaymentSettings } from "@/lib/settings";
 import { getCurrentUser, createSession } from "@/lib/auth";
@@ -10,6 +8,7 @@ import { hashPassword } from "@/lib/password";
 import { initiate, initiateMobile, normalisePhone } from "@/lib/paynow";
 import { createPayment, saveReference } from "@/lib/ngenius";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { prisma } from "@/lib/prisma";
 
 const addr = z.object({
   firstName: z.string().trim().min(1, "First name is required"), lastName: z.string().trim().min(1, "Last name is required"),
@@ -48,16 +47,16 @@ export async function placeOrder(input: CheckoutInput): Promise<{ ok: true; redi
 
   let user = await getCurrentUser();
   if (!user && d.createAccount) {
-    const exists = await db.query.users.findFirst({ where: eq(s.users.email, d.email.toLowerCase()) });
+    const exists = await prisma.user.findFirst({ where: { email: { equals: d.email, mode: "insensitive" } }, select: { id: true } });
     if (exists) return { ok: false, errors: ["An account is already registered with your email address. Please log in."] };
     if (!d.password || d.password.length < 8) return { ok: false, errors: ["Please choose an account password of at least 8 characters."] };
-    const [r] = await db.insert(s.users).values({
+    const created = await prisma.user.create({ data: {
       email: d.email.toLowerCase(), passwordHash: await hashPassword(d.password), firstName: d.billing.firstName, lastName: d.billing.lastName,
       displayName: `${d.billing.firstName} ${d.billing.lastName}`, phone: d.phone, role: "customer",
       billing: { ...d.billing, email: d.email, phone: d.phone },
-    }).$returningId();
-    await createSession(r.id);
-    user = (await db.query.users.findFirst({ where: eq(s.users.id, r.id) })) ?? null;
+    } });
+    await createSession(created.id);
+    user = created;
   }
   const h = await headers();
   const billing = { ...d.billing, email: d.email, phone: d.phone };
@@ -66,7 +65,7 @@ export async function placeOrder(input: CheckoutInput): Promise<{ ok: true; redi
     email: d.email, phone: d.phone, note: d.note, paymentMethod: d.paymentMethod, paymentMethodTitle: pm.title,
     userId: user?.id ?? null, ip: (h.get("x-forwarded-for") || "").split(",")[0].trim(),
   });
-  if (user && !user.billing) await db.update(s.users).set({ billing, phone: d.phone }).where(eq(s.users.id, user.id));
+  if (user && !user.billing) await prisma.user.update({ where: { id: user.id }, data: { billing, phone: d.phone } });
 
   const base = process.env.SITE_URL || `${h.get("x-forwarded-proto") || "http"}://${h.get("host")}`;
   const thankYou = `/checkout/order-received/${order.id}/?key=${order.accessKey}`;
@@ -76,7 +75,7 @@ export async function placeOrder(input: CheckoutInput): Promise<{ ok: true; redi
         reference: order.number, amount: Number(order.total), info: `Order #${order.number}`, email: d.email,
         returnUrl: base + thankYou, resultUrl: `${base}/api/paynow/result/?order=${order.id}`, phone: mobilePhone, method: mobile.method,
       });
-      await db.update(s.orders).set({ paynowPollUrl: pn.pollUrl, paymentMethodTitle: `${pm.title} (${mobile.method === "onemoney" ? "OneMoney" : "EcoCash"} ${mobilePhone})` }).where(eq(s.orders.id, order.id));
+      await prisma.order.update({ where: { id: order.id }, data: { paynowPollUrl: pn.pollUrl, paymentMethodTitle: `${pm.title} (${mobile.method === "onemoney" ? "OneMoney" : "EcoCash"} ${mobilePhone})` } });
       await addNote(order.id, `${mobile.method === "onemoney" ? "OneMoney" : "EcoCash"} prompt sent to ${mobilePhone}.${pn.instructions ? " Paynow: " + pn.instructions : ""}`, false, "Paynow");
       return { ok: true, redirect: `${thankYou}&mobile=${mobilePhone.slice(0, 3)}***${mobilePhone.slice(-3)}` };
     } catch (e: any) {
@@ -91,7 +90,7 @@ export async function placeOrder(input: CheckoutInput): Promise<{ ok: true; redi
         reference: order.number, amount: Number(order.total), info: `Order #${order.number}`, email: d.email,
         returnUrl: base + thankYou, resultUrl: `${base}/api/paynow/result/?order=${order.id}`,
       });
-      await db.update(s.orders).set({ paynowPollUrl: pn.pollUrl }).where(eq(s.orders.id, order.id));
+      await prisma.order.update({ where: { id: order.id }, data: { paynowPollUrl: pn.pollUrl } });
       await addNote(order.id, "Customer redirected to Paynow.", false, "Paynow");
       return { ok: true, redirect: pn.browserUrl };
     } catch (e: any) {

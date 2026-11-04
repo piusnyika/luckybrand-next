@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
-import { db, schema as s } from "@/db";
-import { asc } from "drizzle-orm";
 import { ASSISTANT_MODELS, getSite, getSetting, salesContactsOf, type PaymentSettings } from "@/lib/settings";
 import { PageHeader, Card, Field, SubmitButton, FlashToast } from "@/components/admin/ui";
 import { ImageField } from "@/components/admin/MediaPicker";
 import { ShippingEditor } from "@/components/admin/ShippingEditor";
 import { saveGeneral, saveAppearance, savePayments, saveShipping, saveContact, saveIntegrations } from "./actions";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
@@ -15,7 +14,7 @@ const TABS = [["general", "Store details"], ["appearance", "Header & footer"], [
 export default async function Settings({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   await requireAdmin();
   const tab = (await searchParams).tab || "general";
-  const [site, payments, contact, methods] = await Promise.all([getSite(), getSetting<PaymentSettings>("payments"), getSetting<any>("contact"), db.select().from(s.shippingMethods).orderBy(asc(s.shippingMethods.sortOrder))]);
+  const [site, payments, contact, methods] = await Promise.all([getSite(), getSetting<PaymentSettings>("payments"), getSetting<any>("contact"), prisma.shippingMethod.findMany({ orderBy: { sortOrder: "asc" } })]);
   const env = { paynow: !!process.env.PAYNOW_INTEGRATION_ID && !!process.env.PAYNOW_INTEGRATION_KEY, ngenius: !!process.env.NGENIUS_API_KEY && !!process.env.NGENIUS_OUTLET_REF, smtp: !!process.env.SMTP_HOST, mailchimp: !!process.env.MAILCHIMP_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY };
   return (
     <>

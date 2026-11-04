@@ -1,18 +1,17 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { asc, eq, sql } from "drizzle-orm";
 import { PageHeader, Card, Field, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { ImageField } from "@/components/admin/MediaPicker";
 import { saveTerm, deleteTerm } from "./actions";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Brands & tags" };
 export default async function Brands({ searchParams }: { searchParams: Promise<{ brand?: string; tag?: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const sp = await searchParams;
   const [brands, tags] = await Promise.all([
-    db.select({ b: s.brands, n: sql<number>`(SELECT COUNT(*) FROM product_brands pb WHERE pb.brand_id = ${s.brands.id})` }).from(s.brands).orderBy(asc(s.brands.name)),
-    db.select({ t: s.tags, n: sql<number>`(SELECT COUNT(*) FROM product_tags pt WHERE pt.tag_id = ${s.tags.id})` }).from(s.tags).orderBy(asc(s.tags.name)),
+    prisma.brand.findMany({ orderBy: { name: "asc" }, include: { _count: { select: { products: true } } } }).then((r) => r.map(({ _count, ...b }) => ({ b, n: _count.products }))),
+    prisma.tag.findMany({ orderBy: { name: "asc" }, include: { _count: { select: { products: true } } } }).then((r) => r.map(({ _count, ...t }) => ({ t, n: _count.products }))),
   ]);
   const b = sp.brand ? brands.find((x) => x.b.id === Number(sp.brand))?.b : null;
   const t = sp.tag ? tags.find((x) => x.t.id === Number(sp.tag))?.t : null;

@@ -1,13 +1,14 @@
 import { cache } from "react";
-import { db, schema as s } from "@/db";
-import { and, asc, desc, eq, inArray, like, or, sql, gte, lte, ne, type SQL } from "drizzle-orm";
+import { prisma, Prisma } from "@/lib/prisma";
+import type { Category as CategoryRow } from "@prisma/client";
+import type { StockStatus } from "@/lib/db-types";
 
-export type Category = typeof s.categories.$inferSelect & { children?: Category[]; count?: number };
+export type Category = CategoryRow & { children?: Category[]; count?: number };
 
 export type ProductCard = {
   id: number; name: string; slug: string; sku: string | null;
   price: number; regularPrice: number; salePrice: number | null; onSale: boolean;
-  image: string | null; imageAlt: string; stockStatus: "instock" | "outofstock" | "onbackorder"; badgeText: string; isBundle?: boolean;
+  image: string | null; imageAlt: string; stockStatus: StockStatus; badgeText: string; isBundle?: boolean;
 };
 
 /** Price actually charged right now (sale price respects its schedule) */
@@ -19,27 +20,29 @@ export function effectivePrice(p: { regularPrice: string | number; salePrice: st
   return { price: active ? sale! : reg, regularPrice: reg, salePrice: active ? sale : null, onSale: active };
 }
 
-const priceExpr = sql<number>`CASE WHEN ${s.products.salePrice} IS NOT NULL AND ${s.products.salePrice} < ${s.products.regularPrice}
-  AND (${s.products.saleFrom} IS NULL OR ${s.products.saleFrom} <= NOW()) AND (${s.products.saleTo} IS NULL OR ${s.products.saleTo} >= NOW())
-  THEN ${s.products.salePrice} ELSE ${s.products.regularPrice} END`;
+/** Price charged right now, for `products p` in raw SQL */
+const priceExpr = Prisma.sql`(CASE WHEN p.sale_price IS NOT NULL AND p.sale_price < p.regular_price
+  AND (p.sale_from IS NULL OR p.sale_from <= NOW()) AND (p.sale_to IS NULL OR p.sale_to >= NOW())
+  THEN p.sale_price ELSE p.regular_price END)`;
 
-const cardColumns = {
-  id: s.products.id, name: s.products.name, slug: s.products.slug, sku: s.products.sku,
-  regularPrice: s.products.regularPrice, salePrice: s.products.salePrice, saleFrom: s.products.saleFrom, saleTo: s.products.saleTo,
-  stockStatus: s.products.stockStatus, badgeText: s.products.badgeText, type: s.products.type, image: s.media.url, imageAlt: s.media.alt,
+/** Columns for a product card, from `products p LEFT JOIN media m` */
+const cardColumns = Prisma.sql`p.id, p.name, p.slug, p.sku, p.regular_price::text AS "regularPrice", p.sale_price::text AS "salePrice",
+  p.sale_from AS "saleFrom", p.sale_to AS "saleTo", p.stock_status AS "stockStatus", p.badge_text AS "badgeText", p.type,
+  m.url AS image, m.alt AS "imageAlt"`;
+type CardRow = {
+  id: number; name: string; slug: string; sku: string | null; regularPrice: string; salePrice: string | null;
+  saleFrom: Date | null; saleTo: Date | null; stockStatus: StockStatus; badgeText: string; type: string; image: string | null; imageAlt: string | null;
 };
-function toCard(r: any): ProductCard {
+function toCard(r: CardRow): ProductCard {
   const p = effectivePrice(r);
   return { id: r.id, name: r.name, slug: r.slug, sku: r.sku, ...p, image: r.image ?? null, imageAlt: r.imageAlt || r.name, stockStatus: r.stockStatus, badgeText: r.badgeText, ...(r.type === "bundle" ? { isBundle: true } : {}) };
 }
 
 /* ---------------- categories ---------------- */
 export const getAllCategories = cache(async (): Promise<Category[]> => {
-  const rows = await db.select().from(s.categories).orderBy(asc(s.categories.sortOrder), asc(s.categories.name));
-  const counts = await db.select({ id: s.productCategories.categoryId, c: sql<number>`COUNT(*)` })
-    .from(s.productCategories).innerJoin(s.products, eq(s.products.id, s.productCategories.productId))
-    .where(eq(s.products.status, "published")).groupBy(s.productCategories.categoryId);
-  const cm = new Map(counts.map((c) => [c.id, Number(c.c)]));
+  const rows = await prisma.category.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] });
+  const counts = await prisma.productCategory.groupBy({ by: ["categoryId"], where: { product: { status: "published" } }, _count: { _all: true } });
+  const cm = new Map(counts.map((c) => [c.categoryId, c._count._all]));
   return rows.map((r) => ({ ...r, count: cm.get(r.id) ?? 0 }));
 });
 
@@ -89,82 +92,83 @@ export type ListParams = {
   minPrice?: number; maxPrice?: number; excludeIds?: number[]; includeDrafts?: boolean;
 };
 
+/** Condition (for `products p`): in these categories or any of their subcategories */
+async function inCategories(categoryIds: number[]) {
+  const ids = await descendantIds(categoryIds);
+  return Prisma.sql`p.id IN (SELECT product_id FROM product_categories WHERE category_id IN (${Prisma.join(ids)}))`;
+}
+
 export async function listProducts(p: ListParams = {}) {
-  const where: SQL[] = [];
-  where.push(p.includeDrafts ? ne(s.products.status, "trash") : eq(s.products.status, "published"));
-  if (p.categoryIds?.length) {
-    const ids = await descendantIds(p.categoryIds);
-    where.push(inArray(s.products.id, db.select({ id: s.productCategories.productId }).from(s.productCategories).where(inArray(s.productCategories.categoryId, ids))));
-  }
-  if (p.brandId) where.push(inArray(s.products.id, db.select({ id: s.productBrands.productId }).from(s.productBrands).where(eq(s.productBrands.brandId, p.brandId))));
-  if (p.tagId) where.push(inArray(s.products.id, db.select({ id: s.productTags.productId }).from(s.productTags).where(eq(s.productTags.tagId, p.tagId))));
+  const where: Prisma.Sql[] = [];
+  where.push(p.includeDrafts ? Prisma.sql`p.status <> 'trash'` : Prisma.sql`p.status = 'published'`);
+  if (p.categoryIds?.length) where.push(await inCategories(p.categoryIds));
+  if (p.brandId) where.push(Prisma.sql`p.id IN (SELECT product_id FROM product_brands WHERE brand_id = ${p.brandId})`);
+  if (p.tagId) where.push(Prisma.sql`p.id IN (SELECT product_id FROM product_tags WHERE tag_id = ${p.tagId})`);
   if (p.search) {
     const words = p.search.trim().split(/\s+/).filter(Boolean).slice(0, 6);
-    for (const w of words) where.push(or(like(s.products.name, `%${w}%`), like(s.products.sku, `%${w}%`))!);
+    for (const w of words) { const like = `%${likeEscape(w)}%`; where.push(Prisma.sql`(p.name ILIKE ${like} OR p.sku ILIKE ${like})`); }
   }
-  if (p.inStock) where.push(ne(s.products.stockStatus, "outofstock"));
-  if (p.featured) where.push(eq(s.products.featured, true));
-  if (p.onSale) where.push(sql`${priceExpr} < ${s.products.regularPrice}`);
-  if (p.minPrice !== undefined) where.push(gte(priceExpr, p.minPrice));
-  if (p.maxPrice !== undefined) where.push(lte(priceExpr, p.maxPrice));
-  if (p.excludeIds?.length) where.push(sql`${s.products.id} NOT IN (${sql.join(p.excludeIds.map((i) => sql`${i}`), sql`, `)})`);
+  if (p.inStock) where.push(Prisma.sql`p.stock_status <> 'outofstock'`);
+  if (p.featured) where.push(Prisma.sql`p.featured = true`);
+  if (p.onSale) where.push(Prisma.sql`${priceExpr} < p.regular_price`);
+  if (p.minPrice !== undefined) where.push(Prisma.sql`${priceExpr} >= ${p.minPrice}`);
+  if (p.maxPrice !== undefined) where.push(Prisma.sql`${priceExpr} <= ${p.maxPrice}`);
+  if (p.excludeIds?.length) where.push(Prisma.sql`p.id NOT IN (${Prisma.join(p.excludeIds)})`);
 
   const order = {
-    latest: [desc(s.products.createdAt), desc(s.products.id)],
-    price: [asc(priceExpr)], "price-desc": [desc(priceExpr)],
-    popularity: [desc(s.products.totalSales), desc(s.products.views)],
-    name: [asc(s.products.name)], random: [sql`RAND()`], menu_order: [asc(s.products.name)],
+    latest: Prisma.sql`p.created_at DESC, p.id DESC`,
+    price: Prisma.sql`${priceExpr} ASC`, "price-desc": Prisma.sql`${priceExpr} DESC`,
+    popularity: Prisma.sql`p.total_sales DESC, p.views DESC`,
+    name: Prisma.sql`p.name ASC`, random: Prisma.sql`RANDOM()`, menu_order: Prisma.sql`p.name ASC`,
   }[p.sort ?? "latest"];
 
   const perPage = p.perPage ?? 20; const page = Math.max(1, p.page ?? 1);
-  const cond = where.length ? and(...where) : undefined;
+  const cond = Prisma.join(where, " AND ");
   const [rows, [{ total }]] = await Promise.all([
-    db.select(cardColumns).from(s.products).leftJoin(s.media, eq(s.media.id, s.products.imageId)).where(cond)
-      .orderBy(...order).limit(perPage).offset((page - 1) * perPage),
-    db.select({ total: sql<number>`COUNT(*)` }).from(s.products).where(cond),
+    prisma.$queryRaw<CardRow[]>`SELECT ${cardColumns} FROM products p LEFT JOIN media m ON m.id = p.image_id
+      WHERE ${cond} ORDER BY ${order} LIMIT ${perPage} OFFSET ${(page - 1) * perPage}`,
+    prisma.$queryRaw<{ total: bigint }[]>`SELECT COUNT(*) AS total FROM products p WHERE ${cond}`,
   ]);
   return { items: rows.map(toCard), total: Number(total), page, perPage, pages: Math.max(1, Math.ceil(Number(total) / perPage)) };
 }
 
+/** Escapes % and _ so a search word is matched literally by LIKE/ILIKE */
+export const likeEscape = (s: string) => s.replace(/[\\%_]/g, "\\$&");
+
 export async function priceRange(categoryIds?: number[]) {
-  const where: SQL[] = [eq(s.products.status, "published")];
-  if (categoryIds?.length) {
-    const ids = await descendantIds(categoryIds);
-    where.push(inArray(s.products.id, db.select({ id: s.productCategories.productId }).from(s.productCategories).where(inArray(s.productCategories.categoryId, ids))));
-  }
-  const [r] = await db.select({ min: sql<number>`MIN(${priceExpr})`, max: sql<number>`MAX(${priceExpr})` }).from(s.products).where(and(...where));
+  const where: Prisma.Sql[] = [Prisma.sql`p.status = 'published'`];
+  if (categoryIds?.length) where.push(await inCategories(categoryIds));
+  const [r] = await prisma.$queryRaw<{ min: string | null; max: string | null }[]>`SELECT MIN(${priceExpr})::text AS min, MAX(${priceExpr})::text AS max
+    FROM products p WHERE ${Prisma.join(where, " AND ")}`;
   return { min: Math.floor(Number(r?.min ?? 0)), max: Math.ceil(Number(r?.max ?? 0)) };
 }
 
 export async function getCards(ids: number[]): Promise<ProductCard[]> {
   if (!ids.length) return [];
-  const rows = await db.select(cardColumns).from(s.products).leftJoin(s.media, eq(s.media.id, s.products.imageId))
-    .where(and(inArray(s.products.id, ids), eq(s.products.status, "published")));
+  const rows = await prisma.$queryRaw<CardRow[]>`SELECT ${cardColumns} FROM products p LEFT JOIN media m ON m.id = p.image_id
+    WHERE p.id IN (${Prisma.join(ids)}) AND p.status = 'published'`;
   const m = new Map(rows.map((r) => [r.id, toCard(r)]));
   return ids.map((i) => m.get(i)).filter(Boolean) as ProductCard[];
 }
 
 /* ---------------- single product ---------------- */
 export const getProductBySlug = cache(async (slug: string, includeDrafts = false) => {
-  const p = await db.query.products.findFirst({
-    where: includeDrafts ? eq(s.products.slug, slug) : and(eq(s.products.slug, slug), eq(s.products.status, "published")),
-  });
+  const p = await prisma.product.findFirst({ where: includeDrafts ? { slug } : { slug, status: "published" } });
   if (!p) return null;
   return { ...p, ...effectivePrice(p), ...(await productRelations(p.id, p.name)) };
 });
 
-/** Images, categories, brands and tags for one product (plain joins: works on MySQL and MariaDB) */
+/** Images, categories, brands and tags for one product */
 export async function productRelations(id: number, name = "") {
   const [imgs, cats, brs, tgs] = await Promise.all([
-    db.select({ id: s.media.id, url: s.media.url, alt: s.media.alt, width: s.media.width, height: s.media.height })
-      .from(s.productImages).innerJoin(s.media, eq(s.media.id, s.productImages.mediaId)).where(eq(s.productImages.productId, id)).orderBy(asc(s.productImages.position)),
-    db.select({ c: s.categories }).from(s.productCategories).innerJoin(s.categories, eq(s.categories.id, s.productCategories.categoryId)).where(eq(s.productCategories.productId, id)),
-    db.select({ b: s.brands }).from(s.productBrands).innerJoin(s.brands, eq(s.brands.id, s.productBrands.brandId)).where(eq(s.productBrands.productId, id)),
-    db.select({ t: s.tags }).from(s.productTags).innerJoin(s.tags, eq(s.tags.id, s.productTags.tagId)).where(eq(s.productTags.productId, id)),
+    prisma.productImage.findMany({ where: { productId: id }, orderBy: { position: "asc" }, select: { media: { select: { id: true, url: true, alt: true, width: true, height: true } } } }),
+    prisma.productCategory.findMany({ where: { productId: id }, select: { category: true } }),
+    prisma.productBrand.findMany({ where: { productId: id }, select: { brand: true } }),
+    prisma.productTag.findMany({ where: { productId: id }, select: { tag: true } }),
   ]);
   return {
-    gallery: imgs.map((i) => ({ ...i, alt: i.alt || name })),
-    categoryList: cats.map((x) => x.c), brandList: brs.map((x) => x.b), tagList: tgs.map((x) => x.t),
+    gallery: imgs.map(({ media: i }) => ({ ...i, alt: i.alt || name })),
+    categoryList: cats.map((x) => x.category), brandList: brs.map((x) => x.brand), tagList: tgs.map((x) => x.tag),
   };
 }
 
@@ -182,11 +186,11 @@ export async function searchSuggest(q: string, limit = 8) {
 /* ---------------- menus ---------------- */
 export type MenuNode = { id: number; label: string; url: string; children: MenuNode[] };
 export const getMenu = cache(async (menu: string): Promise<MenuNode[]> => {
-  const rows = await db.select().from(s.menuItems).where(eq(s.menuItems.menu, menu)).orderBy(asc(s.menuItems.position), asc(s.menuItems.id));
+  const rows = await prisma.menuItem.findMany({ where: { menu }, orderBy: [{ position: "asc" }, { id: "asc" }] });
   const nodes = new Map(rows.map((r) => [r.id, { id: r.id, label: r.label, url: r.url, children: [] as MenuNode[] }]));
   const roots: MenuNode[] = [];
   for (const r of rows) (r.parentId && nodes.get(r.parentId) ? nodes.get(r.parentId)!.children : roots).push(nodes.get(r.id)!);
   return roots;
 });
 
-export const getBrands = cache(async () => db.select().from(s.brands).orderBy(asc(s.brands.name)));
+export const getBrands = cache(async () => prisma.brand.findMany({ orderBy: { name: "asc" } }));

@@ -1,28 +1,33 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { and, desc, eq, like, or, sql, type SQL } from "drizzle-orm";
 import { money, formatDate } from "@/lib/format";
 import { PageHeader, Table, th, td, Empty, Badge, FlashToast } from "@/components/admin/ui";
 import { Pagination } from "@/components/store/ShopView";
 import { BulkBar } from "@/components/admin/BulkBar";
 import { bulkCustomers } from "./actions";
+import { prisma, Prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Customers" };
 export default async function Customers({ searchParams }: { searchParams: Promise<{ q?: string; role?: string; page?: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const sp = await searchParams; const page = Math.max(1, Number(sp.page || 1)); const per = 30;
-  const where: SQL[] = [];
-  if (sp.q) where.push(or(like(s.users.email, `%${sp.q}%`), like(s.users.firstName, `%${sp.q}%`), like(s.users.lastName, `%${sp.q}%`), like(s.users.phone, `%${sp.q}%`))!);
-  if (sp.role === "admin" || sp.role === "manager" || sp.role === "customer") where.push(eq(s.users.role, sp.role));
-  if (sp.role === "blocked") where.push(eq(s.users.blocked, true));
-  const cond = where.length ? and(...where) : undefined;
-  const [rows, [{ total }]] = await Promise.all([
-    db.select({ u: s.users, orders: sql<number>`(SELECT COUNT(*) FROM orders o WHERE o.user_id = ${s.users.id} OR o.email = ${s.users.email})`,
-      spent: sql<number>`(SELECT COALESCE(SUM(total),0) FROM orders o WHERE (o.user_id = ${s.users.id} OR o.email = ${s.users.email}) AND o.status IN ('processing','completed','on-hold'))` })
-      .from(s.users).where(cond).orderBy(desc(s.users.createdAt)).limit(per).offset((page - 1) * per),
-    db.select({ total: sql<number>`COUNT(*)` }).from(s.users).where(cond),
+  const q = sp.q ? { contains: sp.q, mode: "insensitive" as const } : null;
+  const cond: Prisma.UserWhereInput = {
+    ...(q ? { OR: [{ email: q }, { firstName: q }, { lastName: q }, { phone: q }] } : {}),
+    ...(sp.role === "admin" || sp.role === "manager" || sp.role === "customer" ? { role: sp.role } : {}),
+    ...(sp.role === "blocked" ? { blocked: true } : {}),
+  };
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({ where: cond, orderBy: { createdAt: "desc" }, take: per, skip: (page - 1) * per }),
+    prisma.user.count({ where: cond }),
   ]);
+  // orders placed while logged in, or as a guest with the same email
+  const stats = users.length ? await prisma.$queryRaw<{ id: number; orders: bigint; spent: string }[]>`SELECT u.id,
+      (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id OR lower(o.email) = lower(u.email)) AS orders,
+      (SELECT COALESCE(SUM(total), 0)::text FROM orders o WHERE (o.user_id = u.id OR lower(o.email) = lower(u.email)) AND o.status IN ('processing','completed','on-hold')) AS spent
+    FROM users u WHERE u.id IN (${Prisma.join(users.map((u) => u.id))})` : [];
+  const byId = new Map(stats.map((st) => [st.id, st]));
+  const rows = users.map((u) => ({ u, orders: Number(byId.get(u.id)?.orders ?? 0), spent: byId.get(u.id)?.spent ?? "0" }));
   return (
     <>
       <FlashToast />

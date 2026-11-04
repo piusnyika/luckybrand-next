@@ -1,9 +1,8 @@
 import "server-only";
-import { db, schema as s } from "@/db";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { prisma, jsonOrNull, type Db, type Prisma } from "@/lib/prisma";
 import { effectivePrice } from "./catalog";
 import { randomBytes } from "crypto";
-import type { Address, BundleSnapshot } from "@/db/schema";
+import type { Address, BundleSnapshot, OrderStatus } from "@/lib/db-types";
 import { getBundleItems, bundleMaxQty, bundlePrice, snapshot, refreshBundleStock } from "./bundles";
 
 export type CartInput = { id: number; qty: number }[];
@@ -21,8 +20,9 @@ export type Quote = {
 
 export async function quoteCart(input: CartInput, couponCode?: string | null, shippingMethodId?: number | null): Promise<Quote> {
   const ids = [...new Set(input.map((l) => Number(l.id)).filter(Boolean))];
-  const rows = ids.length ? await db.select({ p: s.products, image: s.media.url }).from(s.products)
-    .leftJoin(s.media, eq(s.media.id, s.products.imageId)).where(inArray(s.products.id, ids)) : [];
+  const rows = ids.length
+    ? (await prisma.product.findMany({ where: { id: { in: ids } }, include: { image: { select: { url: true } } } })).map(({ image, ...p }) => ({ p, image: image?.url ?? null }))
+    : [];
   const byId = new Map(rows.map((r) => [r.p.id, r]));
   const bundles = await getBundleItems(rows.filter((r) => r.p.type === "bundle").map((r) => r.p.id));
   const errors: string[] = [];
@@ -38,7 +38,7 @@ export async function quoteCart(input: CartInput, couponCode?: string | null, sh
     if ((!items && r.p.stockStatus === "outofstock") || maxQty === 0) error = `“${r.p.name}” is out of stock.`;
     else if (maxQty !== null && qty > maxQty) error = `Only ${maxQty} of “${r.p.name}” in stock.`;
     if (error) errors.push(error);
-    lines.push({ id: r.p.id, name: r.p.name, slug: r.p.slug, sku: r.p.sku || "", image: r.image ?? null, price, qty, total: round(price * qty), maxQty, error, ...(items ? { includes: snapshot(items) } : {}) });
+    lines.push({ id: r.p.id, name: r.p.name, slug: r.p.slug, sku: r.p.sku || "", image: r.image, price, qty, total: round(price * qty), maxQty, error, ...(items ? { includes: snapshot(items) } : {}) });
   }
   // the same product can be wanted both on its own and inside bundles: check the combined quantity
   if (bundles.size) {
@@ -67,7 +67,7 @@ export async function quoteCart(input: CartInput, couponCode?: string | null, sh
   // coupon
   let discount = 0; let coupon: Quote["coupon"] = null; let couponError: string | undefined;
   if (couponCode) {
-    const c = await db.query.coupons.findFirst({ where: eq(s.coupons.code, couponCode.trim().toLowerCase()) });
+    const c = await prisma.coupon.findUnique({ where: { code: couponCode.trim().toLowerCase() } });
     if (!c || !c.active) couponError = `Coupon “${couponCode}” does not exist.`;
     else if (c.expiresAt && c.expiresAt.getTime() < Date.now()) couponError = "This coupon has expired.";
     else if (c.usageLimit !== null && c.usageCount >= c.usageLimit) couponError = "Coupon usage limit has been reached.";
@@ -82,7 +82,7 @@ export async function quoteCart(input: CartInput, couponCode?: string | null, sh
   }
 
   // shipping
-  const methods = await db.select().from(s.shippingMethods).where(eq(s.shippingMethods.enabled, true)).orderBy(asc(s.shippingMethods.sortOrder));
+  const methods = await prisma.shippingMethod.findMany({ where: { enabled: true }, orderBy: { sortOrder: "asc" } });
   const after = subtotal - discount;
   const options: ShippingOption[] = methods
     .filter((m) => m.type !== "free" || m.minAmount === null || after >= Number(m.minAmount) || coupon?.freeShipping)
@@ -97,6 +97,25 @@ export async function quoteCart(input: CartInput, couponCode?: string | null, sh
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
+/** Takes `n` from a product's stock for an order (Postgres evaluates every SET against the old row) */
+async function reserveStock(db: Db, productId: number, n: number) {
+  await db.$executeRaw`UPDATE products SET
+    stock_qty = CASE WHEN manage_stock THEN GREATEST(0, COALESCE(stock_qty, 0) - ${n}) ELSE stock_qty END,
+    stock_status = CASE WHEN manage_stock AND COALESCE(stock_qty, 0) - ${n} <= 0 AND stock_status <> 'onbackorder' THEN 'outofstock' ELSE stock_status END
+    WHERE id = ${productId}`;
+}
+
+/** Puts `n` back into a product's stock (negative takes it again), keeping its in/out of stock status in line */
+async function restockBy(productId: number, n: number) {
+  await prisma.$executeRaw`UPDATE products SET
+    stock_qty = CASE WHEN manage_stock THEN GREATEST(0, COALESCE(stock_qty, 0) + ${n}) ELSE stock_qty END,
+    stock_status = CASE
+      WHEN manage_stock AND COALESCE(stock_qty, 0) + ${n} > 0 AND stock_status = 'outofstock' THEN 'instock'
+      WHEN manage_stock AND COALESCE(stock_qty, 0) + ${n} <= 0 AND stock_status = 'instock' THEN 'outofstock'
+      ELSE stock_status END
+    WHERE id = ${productId}`;
+}
+
 export async function createOrder(args: {
   quote: Quote; billing: Address; shipping: Address | null; email: string; phone: string; note: string;
   paymentMethod: string; paymentMethodTitle: string; userId: number | null; ip: string;
@@ -104,28 +123,25 @@ export async function createOrder(args: {
   const { quote } = args;
   const ship = quote.shippingOptions.find((o) => o.id === quote.shippingMethodId);
   const accessKey = "wc_order_" + randomBytes(10).toString("hex");
-  const orderId = await db.transaction(async (tx) => {
-    const [r] = await tx.insert(s.orders).values({
-      number: "tmp-" + accessKey, status: "pending", userId: args.userId, email: args.email.toLowerCase(), phone: args.phone,
-      subtotal: quote.subtotal.toFixed(2), discountTotal: quote.discount.toFixed(2), shippingTotal: quote.shipping.toFixed(2),
-      taxTotal: "0", total: quote.total.toFixed(2), couponCode: quote.coupon?.code ?? null,
-      paymentMethod: args.paymentMethod, paymentMethodTitle: args.paymentMethodTitle,
-      billing: args.billing, shipping: args.shipping, shippingMethod: ship?.name ?? "", customerNote: args.note, ipAddress: args.ip, accessKey,
-    }).$returningId();
-    await tx.update(s.orders).set({ number: String(r.id) }).where(eq(s.orders.id, r.id));
-    await tx.insert(s.orderItems).values(quote.lines.map((l) => ({ orderId: r.id, productId: l.id, name: l.name, sku: l.sku, quantity: l.qty, unitPrice: l.price.toFixed(2), total: l.total.toFixed(2), bundle: l.includes ?? null })));
+  const orderId = await prisma.$transaction(async (tx) => {
+    const r = await tx.order.create({
+      data: {
+        number: "tmp-" + accessKey, status: "pending", userId: args.userId, email: args.email.toLowerCase(), phone: args.phone,
+        subtotal: quote.subtotal.toFixed(2), discountTotal: quote.discount.toFixed(2), shippingTotal: quote.shipping.toFixed(2),
+        taxTotal: "0", total: quote.total.toFixed(2), couponCode: quote.coupon?.code ?? null,
+        paymentMethod: args.paymentMethod, paymentMethodTitle: args.paymentMethodTitle,
+        billing: args.billing, shipping: jsonOrNull(args.shipping), shippingMethod: ship?.name ?? "", customerNote: args.note, ipAddress: args.ip, accessKey,
+        items: { create: quote.lines.map((l) => ({ productId: l.id, name: l.name, sku: l.sku, quantity: l.qty, unitPrice: l.price.toFixed(2), total: l.total.toFixed(2), bundle: jsonOrNull(l.includes) })) },
+      },
+      select: { id: true },
+    });
+    await tx.order.update({ where: { id: r.id }, data: { number: String(r.id) } });
     // reserve stock (bundles: from each item they contain)
     for (const l of quote.lines) {
-      for (const part of l.includes ?? [{ productId: l.id, qty: 1 }]) {
-        const n = part.qty * l.qty;
-        await tx.update(s.products).set({
-          stockQty: sql`CASE WHEN ${s.products.manageStock} THEN GREATEST(0, COALESCE(${s.products.stockQty},0) - ${n}) ELSE ${s.products.stockQty} END`,
-          stockStatus: sql`CASE WHEN ${s.products.manageStock} AND COALESCE(${s.products.stockQty},0) - ${n} <= 0 AND ${s.products.stockStatus} <> 'onbackorder' THEN 'outofstock' ELSE ${s.products.stockStatus} END`,
-        }).where(eq(s.products.id, part.productId));
-      }
-      await tx.update(s.products).set({ totalSales: sql`${s.products.totalSales} + ${l.qty}` }).where(eq(s.products.id, l.id));
+      for (const part of l.includes ?? [{ productId: l.id, qty: 1 }]) await reserveStock(tx, part.productId, part.qty * l.qty);
+      await tx.product.updateMany({ where: { id: l.id }, data: { totalSales: { increment: l.qty } } });
     }
-    if (quote.coupon) await tx.update(s.coupons).set({ usageCount: sql`${s.coupons.usageCount} + 1` }).where(eq(s.coupons.code, quote.coupon.code));
+    if (quote.coupon) await tx.coupon.updateMany({ where: { code: quote.coupon.code }, data: { usageCount: { increment: 1 } } });
     return r.id;
   });
   await refreshBundleStock(quote.lines.flatMap((l) => (l.includes ?? []).map((i) => i.productId).concat(l.id)));
@@ -134,30 +150,28 @@ export async function createOrder(args: {
 }
 
 export async function getOrder(id: number) {
-  const o = await db.query.orders.findFirst({ where: eq(s.orders.id, id) });
+  const o = await prisma.order.findUnique({ where: { id } });
   if (!o) return null;
   const [items, notes] = await Promise.all([
-    db.select({ i: s.orderItems, slug: s.products.slug, image: s.media.url }).from(s.orderItems)
-      .leftJoin(s.products, eq(s.products.id, s.orderItems.productId)).leftJoin(s.media, eq(s.media.id, s.products.imageId))
-      .where(eq(s.orderItems.orderId, id)).orderBy(asc(s.orderItems.id)),
-    db.select().from(s.orderNotes).where(eq(s.orderNotes.orderId, id)).orderBy(asc(s.orderNotes.createdAt), asc(s.orderNotes.id)),
+    prisma.orderItem.findMany({ where: { orderId: id }, orderBy: { id: "asc" }, include: { product: { select: { slug: true, image: { select: { url: true } } } } } }),
+    prisma.orderNote.findMany({ where: { orderId: id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
   ]);
-  return { ...o, items: items.map((x) => ({ ...x.i, slug: x.slug, image: x.image })), notes };
+  return { ...o, items: items.map(({ product, ...i }) => ({ ...i, slug: product?.slug ?? null, image: product?.image?.url ?? null })), notes };
 }
 export type FullOrder = NonNullable<Awaited<ReturnType<typeof getOrder>>>;
 
 export async function addNote(orderId: number, content: string, isCustomer = false, author = "system") {
-  await db.insert(s.orderNotes).values({ orderId, content, isCustomer, author });
+  await prisma.orderNote.create({ data: { orderId, content, isCustomer, author } });
 }
 
 /** Change status, restock on cancel/fail/refund, stamp dates, send the matching emails. */
-export async function setOrderStatus(orderId: number, status: (typeof s.orders.$inferSelect)["status"], by = "system", note?: string, notify = true) {
+export async function setOrderStatus(orderId: number, status: OrderStatus, by = "system", note?: string, notify = true) {
   const o = await getOrder(orderId);
   if (!o || o.status === status) return o;
-  const patch: Partial<typeof s.orders.$inferInsert> = { status };
+  const patch: Prisma.OrderUpdateInput = { status };
   if ((status === "processing" || status === "completed") && !o.paidAt && o.paymentMethod !== "cod") patch.paidAt = new Date();
   if (status === "completed") patch.completedAt = new Date();
-  await db.update(s.orders).set(patch).where(eq(s.orders.id, orderId));
+  await prisma.order.update({ where: { id: orderId }, data: patch });
   const releases = ["cancelled", "failed", "refunded"];
   if (releases.includes(status) && !releases.includes(o.status)) await restock(o, 1);
   if (!releases.includes(status) && releases.includes(o.status)) await restock(o, -1);
@@ -175,12 +189,8 @@ async function restock(o: FullOrder, dir: 1 | -1) {
     // bundles: the items they contained when ordered (stored on the order line)
     const parts = it.bundle?.length ? it.bundle : it.productId ? [{ productId: it.productId, qty: 1 }] : [];
     for (const part of parts) {
-      const n = dir * part.qty * it.quantity;
       touched.push(part.productId);
-      await db.update(s.products).set({
-        stockQty: sql`CASE WHEN ${s.products.manageStock} THEN GREATEST(0, COALESCE(${s.products.stockQty},0) + ${n}) ELSE ${s.products.stockQty} END`,
-        stockStatus: sql`CASE WHEN ${s.products.manageStock} AND COALESCE(${s.products.stockQty},0) + ${n} > 0 AND ${s.products.stockStatus} = 'outofstock' THEN 'instock' WHEN ${s.products.manageStock} AND COALESCE(${s.products.stockQty},0) + ${n} <= 0 AND ${s.products.stockStatus} = 'instock' THEN 'outofstock' ELSE ${s.products.stockStatus} END`,
-      }).where(eq(s.products.id, part.productId));
+      await restockBy(part.productId, dir * part.qty * it.quantity);
     }
   }
   await refreshBundleStock(touched);

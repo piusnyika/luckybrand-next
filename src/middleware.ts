@@ -19,8 +19,8 @@ function domainRedirect(req: NextRequest) {
 let cache: { at: number; map: Map<string, { to: string; code: number; id: number }> } | null = null;
 async function redirects() {
   if (cache && Date.now() - cache.at < 60_000) return cache.map;
-  const { db, schema } = await import("@/db");
-  const rows = await db.select().from(schema.redirects);
+  const { prisma } = await import("@/lib/prisma");
+  const rows = await prisma.redirect.findMany();
   cache = { at: Date.now(), map: new Map(rows.map((r) => [normalise(r.from), { to: r.to, code: r.code, id: r.id }])) };
   return cache.map;
 }
@@ -45,7 +45,7 @@ export async function middleware(req: NextRequest) {
   try {
     const hit = (await redirects()).get(normalise(path));
     if (hit) {
-      import("@/db").then(({ db, schema }) => import("drizzle-orm").then(({ eq, sql }) => db.update(schema.redirects).set({ hits: sql`${schema.redirects.hits} + 1` }).where(eq(schema.redirects.id, hit.id)))).catch(() => {});
+      import("@/lib/prisma").then(({ prisma }) => prisma.redirect.updateMany({ where: { id: hit.id }, data: { hits: { increment: 1 } } })).catch(() => {});
       return NextResponse.redirect(new URL(hit.to, req.url), hit.code);
     }
   } catch { /* DB not reachable: carry on */ }

@@ -1,17 +1,17 @@
 import { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { csvCell } from "@/lib/format";
-import { db, schema as s } from "@/db";
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { prisma } from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
   const u = await getCurrentUser(); if (!u || u.role === "customer") return new Response("forbidden", { status: 403 });
-  const p = req.nextUrl.searchParams; const where: SQL[] = [];
-  if (p.get("status")) where.push(eq(s.orders.status, p.get("status") as any));
-  if (p.get("from")) where.push(sql`${s.orders.createdAt} >= ${p.get("from")}`);
-  if (p.get("to")) where.push(sql`${s.orders.createdAt} < DATE_ADD(${p.get("to")}, INTERVAL 1 DAY)`);
-  const rows = await db.select({ o: s.orders, items: sql<string>`(SELECT GROUP_CONCAT(CONCAT(name, ' x', quantity) SEPARATOR '; ') FROM order_items WHERE order_id = ${s.orders.id})` })
-    .from(s.orders).where(where.length ? and(...where) : undefined).orderBy(desc(s.orders.createdAt));
+  const p = req.nextUrl.searchParams;
+  const day = (v: string | null, add = 0) => { const d = v ? new Date(v + "T00:00:00Z") : null; return d && !isNaN(d.getTime()) ? new Date(d.getTime() + add * 86_400_000) : undefined; };
+  const from = day(p.get("from")), to = day(p.get("to"), 1);
+  const rows = (await prisma.order.findMany({
+    where: { ...(p.get("status") ? { status: p.get("status")! } : {}), ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}) },
+    orderBy: { createdAt: "desc" }, include: { items: { select: { name: true, quantity: true }, orderBy: { id: "asc" } } },
+  })).map(({ items, ...o }) => ({ o, items: items.map((i) => `${i.name} x${i.quantity}`).join("; ") }));
   const esc = csvCell;
   const head = ["Order", "Date", "Status", "First name", "Last name", "Email", "Phone", "City", "Items", "Subtotal", "Discount", "Shipping", "Total", "Payment", "Transaction"];
   const lines = rows.map(({ o, items }) => [o.number, o.createdAt.toISOString(), o.status, o.billing?.firstName, o.billing?.lastName, o.email, o.phone, o.billing?.city, items, o.subtotal, o.discountTotal, o.shippingTotal, o.total, o.paymentMethodTitle, o.transactionId].map(esc).join(","));

@@ -1,14 +1,13 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { db, schema as s } from "@/db";
-import { desc, eq, sql } from "drizzle-orm";
 import { AccountShell } from "@/components/store/AccountShell";
 import { money, formatDate, STATUS_LABEL } from "@/lib/format";
+import { prisma } from "@/lib/prisma";
 
 export default async function Orders() {
   const u = await requireUser("/my-account/orders/");
-  const rows = await db.select({ o: s.orders, items: sql<number>`(SELECT COALESCE(SUM(quantity),0) FROM order_items WHERE order_id = ${s.orders.id})` })
-    .from(s.orders).where(eq(s.orders.userId, u.id)).orderBy(desc(s.orders.createdAt));
+  const rows = (await prisma.order.findMany({ where: { userId: u.id }, orderBy: { createdAt: "desc" }, include: { items: { select: { quantity: true } } } }))
+    .map(({ items, ...o }) => ({ o, items: items.reduce((a, i) => a + i.quantity, 0) }));
   return (
     <AccountShell active="/my-account/orders/" title="Orders">
       {rows.length === 0 ? <p className="rounded-base bg-surface p-5 text-sm">No order has been made yet. <Link href="/shop/" className="font-semibold text-primary">Browse products</Link></p> : (

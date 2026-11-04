@@ -1,7 +1,6 @@
 import "server-only";
 import { setOrderStatus, addNote, getOrder } from "./orders";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
+import { prisma } from "@/lib/prisma";
 
 /**
  * N-Genius (Network International) hosted payment page: Visa / Mastercard.
@@ -104,6 +103,6 @@ export async function cancelUnpaidNgeniusOrder(orderId: number) {
 }
 
 export async function saveReference(orderId: number, reference: string) {
-  await db.update(s.orders).set({ transactionId: reference }).where(eq(s.orders.id, orderId));
+  await prisma.order.update({ where: { id: orderId }, data: { transactionId: reference } });
   await addNote(orderId, `Customer redirected to the N-Genius card payment page (order ${reference}).`, false, "N-Genius");
 }

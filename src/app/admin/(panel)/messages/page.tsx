@@ -1,10 +1,9 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { desc, eq } from "drizzle-orm";
 import { formatDateTime } from "@/lib/format";
 import { PageHeader, Card, Empty, Table, th, td, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { deleteMessage, deleteSubscriber } from "./actions";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Messages" };
 export const dynamic = "force-dynamic";
@@ -12,7 +11,7 @@ export default async function Messages({ searchParams }: { searchParams: Promise
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const sp = await searchParams;
   if (sp.tab === "subscribers") {
-    const subs = await db.select().from(s.subscribers).orderBy(desc(s.subscribers.createdAt));
+    const subs = await prisma.subscriber.findMany({ orderBy: { createdAt: "desc" } });
     return (<>
       <FlashToast />
       <PageHeader title="Newsletter subscribers" subtitle={`${subs.length} subscribers`} actions={<><Link href="/admin/messages/" className="btn-outline h-10 text-sm">Contact messages</Link><a href="/api/admin/subscribers-export/" className="btn-primary h-10 text-sm">Export CSV</a></>} />
@@ -21,9 +20,9 @@ export default async function Messages({ searchParams }: { searchParams: Promise
       </Table>}
     </>);
   }
-  const rows = await db.select().from(s.contactMessages).orderBy(desc(s.contactMessages.createdAt)).limit(200);
+  const rows = await prisma.contactMessage.findMany({ orderBy: { createdAt: "desc" }, take: 200 });
   const cur = sp.id ? rows.find((r) => r.id === Number(sp.id)) : rows[0];
-  if (cur && !cur.read) await db.update(s.contactMessages).set({ read: true }).where(eq(s.contactMessages.id, cur.id));
+  if (cur && !cur.read) await prisma.contactMessage.update({ where: { id: cur.id }, data: { read: true } });
   return (<>
     <FlashToast />
     <PageHeader title="Contact messages" actions={<Link href="/admin/messages/?tab=subscribers" className="btn-outline h-10 text-sm">Newsletter subscribers</Link>} />

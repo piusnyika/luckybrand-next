@@ -1,14 +1,13 @@
 import { requireStaff } from "@/lib/auth";
 import { notFound } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
 import { PageHeader, Card, Field, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { RichText } from "@/components/admin/RichText";
 import { savePage, deletePage } from "../actions";
+import { prisma } from "@/lib/prisma";
 export const metadata = { title: "Edit page" };
 export default async function EditPage({ params }: { params: Promise<{ id: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
-  const { id } = await params; const p = id === "new" ? null : await db.query.pages.findFirst({ where: eq(s.pages.id, Number(id)) });
+  const { id } = await params; const p = id === "new" ? null : await prisma.page.findUnique({ where: { id: Number(id) } });
   if (id !== "new" && !p) notFound();
   return (
     <>

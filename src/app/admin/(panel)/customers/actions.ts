@@ -1,10 +1,9 @@
 "use server";
 import { redirect } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { and, eq, ne } from "drizzle-orm";
 import { requireStaff } from "@/lib/admin/guard";
 import { hashPassword } from "@/lib/password";
 import { setBlocked, deleteUsers } from "@/lib/admin/customers";
+import { prisma, Prisma } from "@/lib/prisma";
 
 const skippedMsg = (n: number) => (n ? ` (${n} skipped: you can't change your own account, shop managers can only manage customers, and the last admin must stay)` : "");
 
@@ -32,17 +31,17 @@ export async function bulkCustomers(fd: FormData) {
 
 export async function saveCustomer(fd: FormData) {
   const me = await requireStaff(); const id = Number(fd.get("id"));
-  const target = await db.query.users.findFirst({ columns: { role: true, sessionVersion: true }, where: eq(s.users.id, id) });
+  const target = await prisma.user.findUnique({ where: { id }, select: { role: true, sessionVersion: true } });
   if (!target || (me.role !== "admin" && target.role !== "customer")) redirect(`/admin/customers/${id}/?msg=${encodeURIComponent("Error: shop managers can only edit customers")}`);
   const g = (k: string) => String(fd.get(k) ?? "").trim();
   const email = g("email").toLowerCase();
-  if (await db.query.users.findFirst({ where: and(eq(s.users.email, email), ne(s.users.id, id)) })) redirect(`/admin/customers/${id}/?msg=Error%3A%20email%20already%20used`);
-  const patch: Partial<typeof s.users.$inferInsert> = {
+  if (await prisma.user.findFirst({ where: { email: { equals: email, mode: "insensitive" }, id: { not: id } }, select: { id: true } })) redirect(`/admin/customers/${id}/?msg=Error%3A%20email%20already%20used`);
+  const patch: Prisma.UserUpdateInput = {
     firstName: g("firstName"), lastName: g("lastName"), email, phone: g("phone"),
     billing: { firstName: g("firstName"), lastName: g("lastName"), company: g("company"), address1: g("address1"), address2: g("address2"), city: g("city"), state: g("state"), country: "ZW", phone: g("phone"), email },
   };
   if (me.role === "admin" && ["admin", "manager", "customer"].includes(g("role")) && id !== me.id) patch.role = g("role") as "admin" | "manager" | "customer";
   if (g("password")) { if (g("password").length < 8) redirect(`/admin/customers/${id}/?msg=Error%3A%20password%20too%20short`); patch.passwordHash = await hashPassword(g("password")); patch.sessionVersion = target!.sessionVersion + 1; }
-  await db.update(s.users).set(patch).where(eq(s.users.id, id));
+  await prisma.user.update({ where: { id }, data: patch });
   redirect(`/admin/customers/${id}/?msg=Customer%20saved`);
 }

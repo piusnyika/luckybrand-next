@@ -1,7 +1,5 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { and, asc, desc, eq, inArray, like, ne, or, sql, type SQL } from "drizzle-orm";
 import { descendantIds, getAllCategories, effectivePrice } from "@/lib/catalog";
 import { money } from "@/lib/format";
 import { PageHeader, Badge, Table, th, td, Empty, FlashToast } from "@/components/admin/ui";
@@ -9,6 +7,7 @@ import { Pagination } from "@/components/store/ShopView";
 import { bulkProducts } from "./actions";
 import { BulkBar } from "@/components/admin/BulkBar";
 import { purgeExpiredTrash, TRASH_DAYS } from "@/lib/admin/product-trash";
+import { prisma, Prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Products" };
 type SP = { q?: string; cat?: string; status?: string; stock?: string; sort?: string; page?: string };
@@ -18,22 +17,23 @@ export default async function Products({ searchParams }: { searchParams: Promise
   const sp = await searchParams; const page = Math.max(1, Number(sp.page || 1)); const per = 30;
   await purgeExpiredTrash();
   const inTrash = sp.status === "trash";
-  const where: SQL[] = [];
-  if (sp.q) where.push(or(like(s.products.name, `%${sp.q}%`), like(s.products.sku, `%${sp.q}%`))!);
-  if (sp.status === "published" || sp.status === "draft" || sp.status === "trash") where.push(eq(s.products.status, sp.status));
-  else where.push(ne(s.products.status, "trash"));
-  if (sp.stock === "outofstock" || sp.stock === "instock" || sp.stock === "onbackorder") where.push(eq(s.products.stockStatus, sp.stock));
-  if (sp.stock === "low") where.push(sql`${s.products.manageStock} AND ${s.products.stockQty} <= COALESCE(${s.products.lowStockAmount}, 2)`);
-  if (sp.cat) { const cids = await descendantIds([Number(sp.cat)]); where.push(inArray(s.products.id, db.select({ id: s.productCategories.productId }).from(s.productCategories).where(inArray(s.productCategories.categoryId, cids)))); }
-  const order = { name: asc(s.products.name), price: asc(s.products.regularPrice), "price-desc": desc(s.products.regularPrice), sales: desc(s.products.totalSales), stock: asc(s.products.stockQty) }[sp.sort || ""] ?? desc(s.products.id);
-  const cond = where.length ? and(...where) : undefined;
-  const [rows, [{ total }], cats, statusCounts] = await Promise.all([
-    db.select({ p: s.products, image: s.media.url, cat: s.categories.name }).from(s.products).leftJoin(s.media, eq(s.media.id, s.products.imageId))
-      .leftJoin(s.categories, eq(s.categories.id, s.products.primaryCategoryId)).where(cond).orderBy(order).limit(per).offset((page - 1) * per),
-    db.select({ total: sql<number>`COUNT(*)` }).from(s.products).where(cond), getAllCategories(),
-    db.select({ status: s.products.status, n: sql<number>`COUNT(*)` }).from(s.products).groupBy(s.products.status),
+  const where: Prisma.ProductWhereInput[] = [];
+  if (sp.q) where.push({ OR: [{ name: { contains: sp.q, mode: "insensitive" } }, { sku: { contains: sp.q, mode: "insensitive" } }] });
+  if (sp.status === "published" || sp.status === "draft" || sp.status === "trash") where.push({ status: sp.status });
+  else where.push({ status: { not: "trash" } });
+  if (sp.stock === "outofstock" || sp.stock === "instock" || sp.stock === "onbackorder") where.push({ stockStatus: sp.stock });
+  if (sp.stock === "low") where.push({ id: { in: (await prisma.$queryRaw<{ id: number }[]>`SELECT id FROM products WHERE manage_stock AND stock_qty <= COALESCE(low_stock_amount, 2)`).map((r) => r.id) } });
+  if (sp.cat) where.push({ categories: { some: { categoryId: { in: await descendantIds([Number(sp.cat)]) } } } });
+  const orders: Record<string, Prisma.ProductOrderByWithRelationInput> = { name: { name: "asc" }, price: { regularPrice: "asc" }, "price-desc": { regularPrice: "desc" }, sales: { totalSales: "desc" }, stock: { stockQty: { sort: "asc", nulls: "first" } } };
+  const order = orders[sp.sort || ""] ?? { id: "desc" };
+  const cond: Prisma.ProductWhereInput = { AND: where };
+  const [rows, total, cats, statusCounts] = await Promise.all([
+    prisma.product.findMany({ where: cond, orderBy: order, take: per, skip: (page - 1) * per, include: { image: { select: { url: true } }, primaryCategory: { select: { name: true } } } })
+      .then((r) => r.map(({ image, primaryCategory, ...p }) => ({ p, image: image?.url ?? null, cat: primaryCategory?.name ?? null }))),
+    prisma.product.count({ where: cond }), getAllCategories(),
+    prisma.product.groupBy({ by: ["status"], _count: { _all: true } }),
   ]);
-  const count = (st: string) => Number(statusCounts.find((c) => c.status === st)?.n ?? 0);
+  const count = (st: string) => statusCounts.find((c) => c.status === st)?._count._all ?? 0;
   const tabs: [string, string, number][] = [["", "All", count("published") + count("draft")], ["published", "Published", count("published")], ["draft", "Drafts", count("draft")], ["trash", "Trash", count("trash")]];
   const qs = new URLSearchParams(Object.entries(sp).filter(([k, v]) => v && k !== "page") as [string, string][]);
   const pages = Math.ceil(Number(total) / per);

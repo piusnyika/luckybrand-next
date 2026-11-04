@@ -1,6 +1,5 @@
 import "server-only";
-import { and, asc, eq, inArray } from "drizzle-orm";
-import { db, schema as s } from "@/db";
+import { prisma } from "@/lib/prisma";
 
 /**
  * Bundles: a product (type "bundle") made of other products by quantity. Bundles hold no stock of their own:
@@ -15,19 +14,20 @@ export type BundleItem = {
 export async function getBundleItems(bundleIds: number[]): Promise<Map<number, BundleItem[]>> {
   const out = new Map<number, BundleItem[]>();
   if (!bundleIds.length) return out;
-  const rows = await db.select({ b: s.productBundleItems, p: s.products, image: s.media.url }).from(s.productBundleItems)
-    .leftJoin(s.products, eq(s.products.id, s.productBundleItems.productId)).leftJoin(s.media, eq(s.media.id, s.products.imageId))
-    .where(inArray(s.productBundleItems.bundleId, bundleIds)).orderBy(asc(s.productBundleItems.position));
+  // product_bundle_items.product_id has no foreign key on purpose: a deleted item stays listed (as missing) so the bundle stops selling
+  const rows = await prisma.productBundleItem.findMany({ where: { bundleId: { in: bundleIds } }, orderBy: { position: "asc" } });
+  const prods = await prisma.product.findMany({ where: { id: { in: [...new Set(rows.map((b) => b.productId))] } }, include: { image: { select: { url: true } } } });
+  const byId = new Map(prods.map((p) => [p.id, p]));
   const { effectivePrice } = await import("./catalog");
-  for (const { b, p, image } of rows) {
+  for (const b of rows) {
+    const p = byId.get(b.productId);
     const item: BundleItem = p
-      ? { productId: p.id, qty: b.qty, name: p.name, sku: p.sku || "", slug: p.slug, image: image ?? null, price: effectivePrice(p).price, status: p.status, stockStatus: p.stockStatus, manageStock: p.manageStock, stockQty: p.stockQty, missing: false }
+      ? { productId: p.id, qty: b.qty, name: p.name, sku: p.sku || "", slug: p.slug, image: p.image?.url ?? null, price: effectivePrice(p).price, status: p.status, stockStatus: p.stockStatus, manageStock: p.manageStock, stockQty: p.stockQty, missing: false }
       : { productId: b.productId, qty: b.qty, name: `Deleted product #${b.productId}`, sku: "", slug: "", image: null, price: 0, status: "trash", stockStatus: "outofstock", manageStock: false, stockQty: null, missing: true };
     out.set(b.bundleId, [...(out.get(b.bundleId) ?? []), item]);
   }
   return out;
 }
-
 /** How many of a bundle can be sold right now: null = unlimited, 0 = unavailable */
 export function bundleMaxQty(items: BundleItem[]) {
   if (!items.length) return 0;
@@ -53,19 +53,18 @@ export async function refreshBundleStock(productIds?: number[]) {
   let bundleIds: number[];
   if (productIds) {
     if (!productIds.length) return;
-    const rows = await db.selectDistinct({ id: s.productBundleItems.bundleId }).from(s.productBundleItems).where(inArray(s.productBundleItems.productId, productIds));
-    const direct = await db.select({ id: s.products.id }).from(s.products).where(and(inArray(s.products.id, productIds), eq(s.products.type, "bundle")));
-    bundleIds = [...new Set([...rows.map((r) => r.id), ...direct.map((r) => r.id)])];
+    const rows = await prisma.productBundleItem.findMany({ where: { productId: { in: productIds } }, select: { bundleId: true }, distinct: ["bundleId"] });
+    const direct = await prisma.product.findMany({ where: { id: { in: productIds }, type: "bundle" }, select: { id: true } });
+    bundleIds = [...new Set([...rows.map((r) => r.bundleId), ...direct.map((r) => r.id)])];
   } else {
-    bundleIds = (await db.select({ id: s.products.id }).from(s.products).where(eq(s.products.type, "bundle"))).map((r) => r.id);
+    bundleIds = (await prisma.product.findMany({ where: { type: "bundle" }, select: { id: true } })).map((r) => r.id);
   }
   if (!bundleIds.length) return;
   const items = await getBundleItems(bundleIds);
   for (const id of bundleIds) {
     const list = items.get(id) ?? [];
-    await db.update(s.products).set({ stockStatus: bundleMaxQty(list) === 0 ? "outofstock" : "instock", manageStock: false, stockQty: null,
-      regularPrice: bundlePrice(list).toFixed(2), salePrice: null, saleFrom: null, saleTo: null })
-      .where(and(eq(s.products.id, id), eq(s.products.type, "bundle")));
+    await prisma.product.updateMany({ where: { id, type: "bundle" }, data: { stockStatus: bundleMaxQty(list) === 0 ? "outofstock" : "instock", manageStock: false, stockQty: null,
+      regularPrice: bundlePrice(list).toFixed(2), salePrice: null, saleFrom: null, saleTo: null } });
   }
 }
 
@@ -87,8 +86,8 @@ export async function resolveBundleItems(bundleId: number | null, items: { produ
   const errors: string[] = []; const rows: { productId: number; qty: number }[] = [];
   for (const it of items) {
     const p = it.productId
-      ? await db.query.products.findFirst({ where: eq(s.products.id, it.productId) })
-      : it.sku ? await db.query.products.findFirst({ where: eq(s.products.sku, it.sku) }) : undefined;
+      ? await prisma.product.findUnique({ where: { id: it.productId } })
+      : it.sku ? await prisma.product.findFirst({ where: { sku: it.sku } }) : undefined;
     const label = it.sku || `#${it.productId}`;
     if (!p || p.status === "trash") { errors.push(`No product with SKU ${label}`); continue; }
     if (bundleId !== null && p.id === bundleId) { errors.push("A bundle can't contain itself"); continue; }
@@ -108,8 +107,10 @@ export async function resolveBundleItems(bundleId: number | null, items: { produ
 export async function setBundleItems(bundleId: number, items: { productId?: number; sku?: string; qty: number }[]) {
   const { rows, errors } = await resolveBundleItems(bundleId, items);
   if (!errors.length) {
-    await db.delete(s.productBundleItems).where(eq(s.productBundleItems.bundleId, bundleId));
-    await db.insert(s.productBundleItems).values(rows.map((r, i) => ({ bundleId, productId: r.productId, qty: r.qty, position: i })));
+    await prisma.$transaction([
+      prisma.productBundleItem.deleteMany({ where: { bundleId } }),
+      prisma.productBundleItem.createMany({ data: rows.map((r, i) => ({ bundleId, productId: r.productId, qty: r.qty, position: i })) }),
+    ]);
     await refreshBundleStock([bundleId]);
   }
   return errors;

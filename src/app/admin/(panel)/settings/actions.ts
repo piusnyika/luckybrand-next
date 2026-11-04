@@ -1,9 +1,8 @@
 "use server";
 import { redirect } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
 import { requireAdmin, refreshStore } from "@/lib/admin/guard";
 import { ASSISTANT_MODELS, getSetting, saveSetting, getSite, type PaymentSettings } from "@/lib/settings";
+import { prisma } from "@/lib/prisma";
 
 const g = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 const lines = (v: string) => v.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
@@ -43,9 +42,9 @@ export async function saveShipping(fd: FormData) {
   const rows: { id?: number; name: string; type: "free" | "flat" | "pickup"; cost: string; minAmount: string; note: string; enabled: boolean; remove?: boolean }[] = JSON.parse(g(fd, "methods") || "[]");
   for (const [i, r] of rows.entries()) {
     const data = { name: r.name || "Shipping", type: r.type, cost: String(Number(r.cost || 0)), minAmount: r.minAmount ? String(Number(r.minAmount)) : null, note: r.note || "", enabled: r.enabled, sortOrder: i };
-    if (r.id && r.remove) await db.delete(s.shippingMethods).where(eq(s.shippingMethods.id, r.id));
-    else if (r.id) await db.update(s.shippingMethods).set(data).where(eq(s.shippingMethods.id, r.id));
-    else if (!r.remove) await db.insert(s.shippingMethods).values(data);
+    if (r.id && r.remove) await prisma.shippingMethod.deleteMany({ where: { id: r.id } });
+    else if (r.id) await prisma.shippingMethod.updateMany({ where: { id: r.id }, data });
+    else if (!r.remove) await prisma.shippingMethod.create({ data });
   }
   done("shipping");
 }

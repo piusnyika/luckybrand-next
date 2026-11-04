@@ -3,8 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
 import { cache } from "react";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
+import { prisma } from "@/lib/prisma";
 
 const COOKIE = "lb_session";
 const secret = () => {
@@ -15,7 +14,7 @@ const secret = () => {
 };
 
 export async function createSession(userId: number, remember = true) {
-  const u = await db.query.users.findFirst({ columns: { sessionVersion: true }, where: eq(s.users.id, userId) });
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } });
   const token = await new SignJWT({ uid: userId, sv: u?.sessionVersion ?? 0 }).setProtectedHeader({ alg: "HS256" }).setIssuedAt()
     .setExpirationTime(remember ? "30d" : "1d").sign(secret());
   (await cookies()).set(COOKIE, token, {
@@ -30,7 +29,7 @@ export const getCurrentUser = cache(async () => {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secret());
-    const u = await db.query.users.findFirst({ where: eq(s.users.id, Number(payload.uid)) });
+    const u = await prisma.user.findUnique({ where: { id: Number(payload.uid) } });
     // blocked or password changed: signed out everywhere
     return u && !u.blocked && Number(payload.sv ?? 0) === u.sessionVersion ? u : null;
   } catch { return null; }

@@ -1,9 +1,8 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { and, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { money, formatDate, STATUS_LABEL, STATUS_COLOR } from "@/lib/format";
 import { PageHeader, Card, Badge, FlashToast } from "@/components/admin/ui";
+import { prisma, Prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Dashboard" };
 const PAID = ["processing", "completed", "on-hold"] as const;
@@ -13,25 +12,26 @@ export default async function Dashboard() {
   const now = new Date(); const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const since30 = new Date(new Date(Date.now() - 29 * 864e5).toISOString().slice(0, 10) + "T00:00:00Z");
-  const sum = (from: Date, to?: Date) => db.select({ total: sql<number>`COALESCE(SUM(${s.orders.total}),0)`, n: sql<number>`COUNT(*)` }).from(s.orders)
-    .where(and(inArray(s.orders.status, [...PAID]), gte(s.orders.createdAt, from), to ? lte(s.orders.createdAt, to) : undefined));
-  const [[month], [last], [{ products }], [{ customers }], statusCounts, recent, lowStock, daily, top, messages] = await Promise.all([
+  const paid = { status: { in: [...PAID] } };
+  const sum = (from: Date, to?: Date) => prisma.order.aggregate({ where: { ...paid, createdAt: { gte: from, ...(to ? { lte: to } : {}) } }, _sum: { total: true }, _count: { _all: true } })
+    .then((r) => ({ total: Number(r._sum.total ?? 0), n: r._count._all }));
+  const [month, last, products, customers, statusCounts, recent, lowStock, daily, top, messages] = await Promise.all([
     sum(monthStart), sum(lastMonthStart, monthStart),
-    db.select({ products: sql<number>`COUNT(*)` }).from(s.products).where(eq(s.products.status, "published")),
-    db.select({ customers: sql<number>`COUNT(*)` }).from(s.users).where(eq(s.users.role, "customer")),
-    db.select({ status: s.orders.status, n: sql<number>`COUNT(*)` }).from(s.orders).groupBy(s.orders.status),
-    db.select().from(s.orders).orderBy(desc(s.orders.createdAt)).limit(8),
-    db.select({ id: s.products.id, name: s.products.name, stockQty: s.products.stockQty, stockStatus: s.products.stockStatus }).from(s.products)
-      .where(and(eq(s.products.status, "published"), sql`(${s.products.stockStatus} = 'outofstock' OR (${s.products.manageStock} AND ${s.products.stockQty} <= COALESCE(${s.products.lowStockAmount}, 2)))`))
-      .orderBy(s.products.stockQty).limit(8),
-    db.select({ d: sql<string>`DATE_FORMAT(${s.orders.createdAt}, '%Y-%m-%d')`, total: sql<number>`SUM(${s.orders.total})`, n: sql<number>`COUNT(*)` }).from(s.orders)
-      .where(and(inArray(s.orders.status, [...PAID]), gte(s.orders.createdAt, since30))).groupBy(sql`DATE_FORMAT(${s.orders.createdAt}, '%Y-%m-%d')`),
-    db.select({ name: s.orderItems.name, qty: sql<number>`SUM(${s.orderItems.quantity})`, total: sql<number>`SUM(${s.orderItems.total})` }).from(s.orderItems)
-      .innerJoin(s.orders, eq(s.orders.id, s.orderItems.orderId)).where(and(inArray(s.orders.status, [...PAID]), gte(s.orders.createdAt, new Date(Date.now() - 90 * 864e5))))
-      .groupBy(s.orderItems.name).orderBy(desc(sql`SUM(${s.orderItems.total})`)).limit(5),
-    db.select().from(s.contactMessages).where(eq(s.contactMessages.read, false)).orderBy(desc(s.contactMessages.createdAt)).limit(5),
+    prisma.product.count({ where: { status: "published" } }),
+    prisma.user.count({ where: { role: "customer" } }),
+    prisma.order.groupBy({ by: ["status"], _count: { _all: true } }),
+    prisma.order.findMany({ orderBy: { createdAt: "desc" }, take: 8 }),
+    prisma.$queryRaw<{ id: number; name: string; stockQty: number | null; stockStatus: string }[]>`SELECT id, name, stock_qty AS "stockQty", stock_status AS "stockStatus" FROM products
+      WHERE status = 'published' AND (stock_status = 'outofstock' OR (manage_stock AND stock_qty <= COALESCE(low_stock_amount, 2)))
+      ORDER BY stock_qty ASC NULLS FIRST LIMIT 8`,
+    prisma.$queryRaw<{ d: string; total: string; n: bigint }[]>`SELECT to_char(created_at, 'YYYY-MM-DD') AS d, SUM(total)::text AS total, COUNT(*) AS n FROM orders
+      WHERE status IN (${Prisma.join([...PAID])}) AND created_at >= ${since30} GROUP BY 1`,
+    prisma.$queryRaw<{ name: string; qty: bigint; total: string }[]>`SELECT oi.name, SUM(oi.quantity) AS qty, SUM(oi.total)::text AS total FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id WHERE o.status IN (${Prisma.join([...PAID])}) AND o.created_at >= ${new Date(Date.now() - 90 * 864e5)}
+      GROUP BY oi.name ORDER BY SUM(oi.total) DESC LIMIT 5`,
+    prisma.contactMessage.findMany({ where: { read: false }, orderBy: { createdAt: "desc" }, take: 5 }),
   ]);
-  const sc = Object.fromEntries(statusCounts.map((x) => [x.status, Number(x.n)]));
+  const sc = Object.fromEntries(statusCounts.map((x) => [x.status, x._count._all]));
   const days = Array.from({ length: 30 }, (_, i) => { const d = new Date(Date.now() - (29 - i) * 864e5); const key = d.toISOString().slice(0, 10); const row = daily.find((x) => String(x.d) === key); return { key, d, total: Number(row?.total ?? 0) }; });
   const max = Math.max(1, ...days.map((d) => d.total));
   const change = Number(last.total) ? ((Number(month.total) - Number(last.total)) / Number(last.total)) * 100 : null;

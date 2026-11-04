@@ -1,7 +1,6 @@
 import "server-only";
 import { setOrderStatus, addNote, getOrder } from "./orders";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
+import { prisma } from "@/lib/prisma";
 
 /**
  * Applies a (hash-verified) Paynow status to an order. Safe to call repeatedly: from the result URL,
@@ -10,7 +9,7 @@ import { eq } from "drizzle-orm";
 export async function applyPaynowStatus(orderId: number, _current: string, r: { status: string; paid: boolean; failed: boolean; paynowReference: string; amount: string }) {
   const o = await getOrder(orderId);
   if (!o) return;
-  if (r.paynowReference && o.transactionId !== r.paynowReference) await db.update(s.orders).set({ transactionId: r.paynowReference }).where(eq(s.orders.id, orderId));
+  if (r.paynowReference && o.transactionId !== r.paynowReference) await prisma.order.update({ where: { id: orderId }, data: { transactionId: r.paynowReference } });
   const st = r.status.toLowerCase(), by = "Paynow", ref = `Paynow reference: ${r.paynowReference || "–"}`;
   const open = o.status === "pending" || o.status === "failed";
 

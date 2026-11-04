@@ -2,8 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod/v4";
-import { db, schema as s } from "@/db";
-import { asc, eq } from "drizzle-orm";
+import { prisma } from "@/lib/prisma";
 import { getAllCategories, getProductBySlug, listProducts } from "./catalog";
 import { bundleMaxQty, bundlePrice, getBundleItems } from "./bundles";
 import { stripHtml } from "./format";
@@ -56,7 +55,7 @@ const tools = [
 ];
 
 async function systemPrompt() {
-  const [site, payments, shipping] = await Promise.all([getSite(), getSetting<PaymentSettings>("payments"), db.select().from(s.shippingMethods).where(eq(s.shippingMethods.enabled, true)).orderBy(asc(s.shippingMethods.sortOrder))]);
+  const [site, payments, shipping] = await Promise.all([getSite(), getSetting<PaymentSettings>("payments"), prisma.shippingMethod.findMany({ where: { enabled: true }, orderBy: { sortOrder: "asc" } })]);
   const paying = Object.values(payments).filter((p) => p.enabled).map((p) => p.title);
   return `You are ${site.assistantName}, the shopping assistant on the website of ${site.name}, a store in Zimbabwe. Latency-sensitive; begin your visible answer immediately.
 

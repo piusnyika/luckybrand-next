@@ -1,13 +1,12 @@
 "use server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { db, schema as s } from "@/db";
-import { eq, inArray } from "drizzle-orm";
 import { requireStaff } from "@/lib/admin/guard";
 import { setOrderStatus, addNote, getOrder } from "@/lib/orders";
 import { ORDER_STATUSES } from "@/lib/format";
 import { sendMail, layout, orderTable } from "@/lib/mail";
 import { getSite } from "@/lib/settings";
+import { prisma } from "@/lib/prisma";
 
 export async function updateOrder(fd: FormData) {
   const u = await requireStaff(); const id = Number(fd.get("id"));
@@ -15,7 +14,7 @@ export async function updateOrder(fd: FormData) {
   const o = await getOrder(id); if (!o) return;
   const g = (k: string) => String(fd.get(k) ?? "").trim();
   const billing = { ...o.billing, firstName: g("b_firstName"), lastName: g("b_lastName"), company: g("b_company"), address1: g("b_address1"), address2: g("b_address2"), city: g("b_city"), state: g("b_state") };
-  await db.update(s.orders).set({ billing, email: g("email") || o.email, phone: g("phone"), transactionId: g("transactionId") }).where(eq(s.orders.id, id));
+  await prisma.order.update({ where: { id }, data: { billing, email: g("email") || o.email, phone: g("phone"), transactionId: g("transactionId") } });
   if (ORDER_STATUSES.includes(status) && status !== o.status) await setOrderStatus(id, status, u.displayName || u.email);
   revalidatePath(`/admin/orders/${id}/`);
   redirect(`/admin/orders/${id}/?msg=Order%20updated`);
@@ -47,7 +46,7 @@ export async function bulkOrders(fd: FormData) {
   const sel = fd.getAll("sel").map(Number).filter(Boolean); const action = String(fd.get("bulk") || "");
   if (action === "delete") {
     if (u.role !== "admin") redirect("/admin/orders/?msg=Error%3A%20only%20admins%20can%20delete%20orders");
-    await db.delete(s.orderItems).where(inArray(s.orderItems.orderId, sel)); await db.delete(s.orderNotes).where(inArray(s.orderNotes.orderId, sel)); await db.delete(s.orders).where(inArray(s.orders.id, sel));
+    await prisma.order.deleteMany({ where: { id: { in: sel } } }); // items and notes go with them (ON DELETE CASCADE)
   } else if ((ORDER_STATUSES as readonly string[]).includes(action)) {
     for (const id of sel) await setOrderStatus(id, action as (typeof ORDER_STATUSES)[number], u.displayName || u.email);
   }

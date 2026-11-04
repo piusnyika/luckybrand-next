@@ -1,7 +1,5 @@
 import { requireStaff } from "@/lib/auth";
 import { notFound } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { asc, eq } from "drizzle-orm";
 import { getAllCategories, productRelations } from "@/lib/catalog";
 import { PageHeader, FlashToast, ConfirmButton, SubmitButton } from "@/components/admin/ui";
 import { ProductForm } from "@/components/admin/ProductForm";
@@ -9,17 +7,18 @@ import { deleteProduct, duplicateProduct, restoreProduct, saveProduct, trashProd
 import { TRASH_DAYS } from "@/lib/admin/product-trash";
 import { formatDate } from "@/lib/format";
 import { getBundleItems } from "@/lib/bundles";
+import { prisma } from "@/lib/prisma";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) { return { title: (await params).id === "new" ? "Add product" : "Edit product" }; }
 
 export default async function EditProduct({ params }: { params: Promise<{ id: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const { id } = await params; const isNew = id === "new";
-  const p = isNew ? null : await db.query.products.findFirst({ where: eq(s.products.id, Number(id)) });
+  const p = isNew ? null : await prisma.product.findUnique({ where: { id: Number(id) } });
   if (!isNew && !p) notFound();
   const bundle = p?.type === "bundle" ? (await getBundleItems([p.id])).get(p.id) ?? [] : [];
   const [cats, brands, tags, rel] = await Promise.all([
-    getAllCategories(), db.select().from(s.brands).orderBy(asc(s.brands.name)), db.select().from(s.tags).orderBy(asc(s.tags.name)),
+    getAllCategories(), prisma.brand.findMany({ orderBy: { name: "asc" } }), prisma.tag.findMany({ orderBy: { name: "asc" } }),
     p ? productRelations(p.id, p.name) : Promise.resolve({ gallery: [], categoryList: [], brandList: [], tagList: [] }),
   ]);
   return (

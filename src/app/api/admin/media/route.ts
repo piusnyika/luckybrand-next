@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { db, schema as s } from "@/db";
-import { desc, like, or, sql } from "drizzle-orm";
 import { saveUpload } from "@/lib/admin/media";
+import { prisma } from "@/lib/prisma";
 
 async function staff() { const u = await getCurrentUser(); return u && (u.role === "admin" || u.role === "manager"); }
 
 export async function GET(req: NextRequest) {
   if (!(await staff())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const q = req.nextUrl.searchParams.get("q") || ""; const page = Math.max(1, Number(req.nextUrl.searchParams.get("page") || 1));
-  const where = q ? or(like(s.media.title, `%${q}%`), like(s.media.url, `%${q}%`), like(s.media.alt, `%${q}%`)) : undefined;
-  const [items, [{ total }]] = await Promise.all([
-    db.select().from(s.media).where(where).orderBy(desc(s.media.id)).limit(48).offset((page - 1) * 48),
-    db.select({ total: sql<number>`COUNT(*)` }).from(s.media).where(where),
+  const where = q ? { OR: (["title", "url", "alt"] as const).map((f) => ({ [f]: { contains: q, mode: "insensitive" as const } })) } : {};
+  const [items, total] = await Promise.all([
+    prisma.media.findMany({ where, orderBy: { id: "desc" }, take: 48, skip: (page - 1) * 48 }),
+    prisma.media.count({ where }),
   ]);
   return NextResponse.json({ items, total: Number(total), pages: Math.ceil(Number(total) / 48) });
 }

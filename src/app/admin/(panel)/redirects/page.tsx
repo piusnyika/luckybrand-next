@@ -1,12 +1,11 @@
 import { requireAdmin } from "@/lib/auth";
-import { db, schema as s } from "@/db";
-import { desc } from "drizzle-orm";
 import { PageHeader, Card, Table, th, td, Empty, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { saveRedirect, deleteRedirect } from "./actions";
+import { prisma } from "@/lib/prisma";
 export const metadata = { title: "Redirects" };
 export default async function Redirects() {
   await requireAdmin();
-  const rows = await db.select().from(s.redirects).orderBy(desc(s.redirects.id));
+  const rows = await prisma.redirect.findMany({ orderBy: { id: "desc" } });
   return (<>
     <FlashToast />
     <PageHeader title="Redirects" subtitle="Send old or changed URLs to their new location (keeps Google rankings). Changes apply within a minute." />

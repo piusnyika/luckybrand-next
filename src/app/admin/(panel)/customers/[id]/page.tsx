@@ -1,21 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { desc, eq, or } from "drizzle-orm";
 import { getCurrentUser, requireStaff } from "@/lib/auth";
 import { money, formatDate, STATUS_LABEL, STATUS_COLOR } from "@/lib/format";
 import { PageHeader, Card, Field, Badge, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { saveCustomer, blockCustomer, deleteCustomer } from "../actions";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Customer" };
 export default async function Customer({ params }: { params: Promise<{ id: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
-  const u = await db.query.users.findFirst({ where: eq(s.users.id, Number((await params).id)) });
+  const u = await prisma.user.findUnique({ where: { id: Number((await params).id) } });
   if (!u) notFound();
   const me = await getCurrentUser();
   // same rules as lib/admin/customers (last-admin check happens there)
   const canManage = !!me && me.id !== u.id && (me.role === "admin" || u.role === "customer");
-  const orders = await db.select().from(s.orders).where(or(eq(s.orders.userId, u.id), eq(s.orders.email, u.email))).orderBy(desc(s.orders.createdAt));
+  const orders = await prisma.order.findMany({ where: { OR: [{ userId: u.id }, { email: { equals: u.email, mode: "insensitive" } }] }, orderBy: { createdAt: "desc" } });
   const b = u.billing ?? {};
   return (
     <>

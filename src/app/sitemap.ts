@@ -1,16 +1,15 @@
 import type { MetadataRoute } from "next";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
 import { categoryUrlMap } from "@/lib/catalog";
+import { prisma } from "@/lib/prisma";
 
 // built on request: there is no database during the Docker image build
 export const dynamic = "force-dynamic";
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = process.env.SITE_URL || "http://localhost:3000";
   const [products, pages, brands, cats] = await Promise.all([
-    db.select({ slug: s.products.slug, updatedAt: s.products.updatedAt }).from(s.products).where(eq(s.products.status, "published")),
-    db.select({ slug: s.pages.slug, updatedAt: s.pages.updatedAt }).from(s.pages).where(eq(s.pages.published, true)),
-    db.select({ slug: s.brands.slug }).from(s.brands), categoryUrlMap(),
+    prisma.product.findMany({ where: { status: "published" }, select: { slug: true, updatedAt: true } }),
+    prisma.page.findMany({ where: { published: true }, select: { slug: true, updatedAt: true } }),
+    prisma.brand.findMany({ select: { slug: true } }), categoryUrlMap(),
   ]);
   return [
     { url: base + "/", changeFrequency: "daily", priority: 1 },

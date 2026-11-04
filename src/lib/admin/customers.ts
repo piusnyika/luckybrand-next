@@ -1,6 +1,5 @@
 import "server-only";
-import { db, schema as s } from "@/db";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { prisma } from "@/lib/prisma";
 import type { CurrentUser } from "../auth";
 
 /**
@@ -8,9 +7,9 @@ import type { CurrentUser } from "../auth";
  * and never the last admin(s) that would remain unblocked.
  */
 async function allowed(me: CurrentUser, ids: number[]) {
-  const rows = ids.length ? await db.select({ id: s.users.id, role: s.users.role, blocked: s.users.blocked }).from(s.users).where(inArray(s.users.id, ids)) : [];
+  const rows = ids.length ? await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, role: true, blocked: true } }) : [];
   let ok = rows.filter((u) => u.id !== me.id && (me.role === "admin" || u.role === "customer"));
-  const [{ n }] = await db.select({ n: sql<number>`COUNT(*)` }).from(s.users).where(and(eq(s.users.role, "admin"), eq(s.users.blocked, false)));
+  const n = await prisma.user.count({ where: { role: "admin", blocked: false } });
   const adminsHit = ok.filter((u) => u.role === "admin" && !u.blocked).length;
   if (adminsHit && adminsHit >= Number(n)) ok = ok.filter((u) => u.role !== "admin");
   return { ids: ok.map((u) => u.id), skipped: ids.length - ok.length };
@@ -18,16 +17,16 @@ async function allowed(me: CurrentUser, ids: number[]) {
 
 export async function setBlocked(me: CurrentUser, ids: number[], blocked: boolean) {
   const r = await allowed(me, ids);
-  if (r.ids.length) await db.update(s.users).set({ blocked, resetToken: null, resetExpires: null }).where(inArray(s.users.id, r.ids));
+  if (r.ids.length) await prisma.user.updateMany({ where: { id: { in: r.ids } }, data: { blocked, resetToken: null, resetExpires: null } });
   return { done: r.ids.length, skipped: r.skipped };
 }
 
 /** Permanent. Their orders stay (matched by email in the admin), just unlinked from the account. */
 export async function deleteUsers(me: CurrentUser, ids: number[]) {
   const r = await allowed(me, ids);
-  if (r.ids.length) await db.transaction(async (tx) => {
-    await tx.update(s.orders).set({ userId: null }).where(inArray(s.orders.userId, r.ids));
-    await tx.delete(s.users).where(and(inArray(s.users.id, r.ids), ne(s.users.id, me.id)));
-  });
+  if (r.ids.length) await prisma.$transaction([
+    prisma.order.updateMany({ where: { userId: { in: r.ids } }, data: { userId: null } }),
+    prisma.user.deleteMany({ where: { id: { in: r.ids, not: me.id } } }),
+  ]);
   return { done: r.ids.length, skipped: r.skipped };
 }

@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { and, eq } from "drizzle-orm";
 import { stripHtml } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { Breadcrumbs } from "@/components/store/Breadcrumbs";
 import { ContactForm } from "@/components/store/ContactForm";
 import { Icon } from "@/components/Icon";
+import { prisma } from "@/lib/prisma";
 
-const getPage = (slug: string) => db.query.pages.findFirst({ where: and(eq(s.pages.slug, decodeURIComponent(slug)), eq(s.pages.published, true)) });
+const getPage = (slug: string) => prisma.page.findFirst({ where: { slug: decodeURIComponent(slug), published: true } });
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const p = await getPage((await params).slug); if (!p) return {};

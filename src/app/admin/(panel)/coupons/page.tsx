@@ -1,16 +1,15 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { desc, eq } from "drizzle-orm";
 import { money, formatDate } from "@/lib/format";
 import { PageHeader, Card, Field, Table, th, td, Badge, Empty, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { saveCoupon, deleteCoupon } from "./actions";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Coupons" };
 export default async function Coupons({ searchParams }: { searchParams: Promise<{ edit?: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const { edit } = await searchParams;
-  const rows = await db.select().from(s.coupons).orderBy(desc(s.coupons.id));
+  const rows = await prisma.coupon.findMany({ orderBy: { id: "desc" } });
   const c = edit ? rows.find((r) => r.id === Number(edit)) : null;
   return (
     <>

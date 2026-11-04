@@ -1,29 +1,33 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { and, desc, eq, like, or, sql, type SQL } from "drizzle-orm";
 import { money, formatDateTime, STATUS_LABEL, STATUS_COLOR, ORDER_STATUSES } from "@/lib/format";
 import { PageHeader, Badge, Table, th, td, Empty, FlashToast } from "@/components/admin/ui";
 import { Pagination } from "@/components/store/ShopView";
 import { BulkBar } from "@/components/admin/BulkBar";
 import { bulkOrders } from "./actions";
+import { prisma, Prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Orders" };
 export default async function Orders({ searchParams }: { searchParams: Promise<{ status?: string; q?: string; page?: string; from?: string; to?: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const sp = await searchParams; const page = Math.max(1, Number(sp.page || 1)); const per = 30;
-  const where: SQL[] = [];
-  if (sp.status && (ORDER_STATUSES as readonly string[]).includes(sp.status)) where.push(eq(s.orders.status, sp.status as any));
-  if (sp.q) where.push(or(like(s.orders.number, `%${sp.q}%`), like(s.orders.email, `%${sp.q}%`), like(s.orders.phone, `%${sp.q}%`), sql`JSON_UNQUOTE(JSON_EXTRACT(${s.orders.billing}, '$.lastName')) LIKE ${"%" + sp.q + "%"}`, sql`JSON_UNQUOTE(JSON_EXTRACT(${s.orders.billing}, '$.firstName')) LIKE ${"%" + sp.q + "%"}`)!);
-  if (sp.from) where.push(sql`${s.orders.createdAt} >= ${sp.from}`);
-  if (sp.to) where.push(sql`${s.orders.createdAt} < DATE_ADD(${sp.to}, INTERVAL 1 DAY)`);
-  const cond = where.length ? and(...where) : undefined;
-  const [rows, [{ total }], counts] = await Promise.all([
-    db.select({ o: s.orders, items: sql<number>`(SELECT COALESCE(SUM(quantity),0) FROM order_items WHERE order_id = ${s.orders.id})` }).from(s.orders).where(cond).orderBy(desc(s.orders.createdAt), desc(s.orders.id)).limit(per).offset((page - 1) * per),
-    db.select({ total: sql<number>`COUNT(*)` }).from(s.orders).where(cond),
-    db.select({ status: s.orders.status, n: sql<number>`COUNT(*)` }).from(s.orders).groupBy(s.orders.status),
+  const day = (v: string | undefined, add = 0) => { const d = v ? new Date(v + "T00:00:00Z") : null; return d && !isNaN(d.getTime()) ? new Date(d.getTime() + add * 86_400_000) : undefined; };
+  const from = day(sp.from), to = day(sp.to, 1);
+  const q = sp.q ? { contains: sp.q, mode: "insensitive" as const } : null;
+  // customer name lives in the billing JSON
+  const byName = sp.q ? (await prisma.$queryRaw<{ id: number }[]>`SELECT id FROM orders WHERE billing->>'lastName' ILIKE ${"%" + sp.q + "%"} OR billing->>'firstName' ILIKE ${"%" + sp.q + "%"}`).map((r) => r.id) : [];
+  const cond: Prisma.OrderWhereInput = {
+    ...(sp.status && (ORDER_STATUSES as readonly string[]).includes(sp.status) ? { status: sp.status } : {}),
+    ...(q ? { OR: [{ number: q }, { email: q }, { phone: q }, { id: { in: byName } }] } : {}),
+    ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
+  };
+  const [rows, total, counts] = await Promise.all([
+    prisma.order.findMany({ where: cond, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: per, skip: (page - 1) * per, include: { items: { select: { quantity: true } } } })
+      .then((r) => r.map(({ items, ...o }) => ({ o, items: items.reduce((a, i) => a + i.quantity, 0) }))),
+    prisma.order.count({ where: cond }),
+    prisma.order.groupBy({ by: ["status"], _count: { _all: true } }),
   ]);
-  const c = Object.fromEntries(counts.map((x) => [x.status, Number(x.n)])); const all = counts.reduce((a, x) => a + Number(x.n), 0);
+  const c = Object.fromEntries(counts.map((x) => [x.status, x._count._all])); const all = counts.reduce((a, x) => a + x._count._all, 0);
   const tab = (st: string | undefined, label: string, n: number) => <Link key={st ?? "all"} href={st ? `/admin/orders/?status=${st}` : "/admin/orders/"} className={`whitespace-nowrap rounded-full px-3 py-1.5 text-sm ${sp.status === st ? "bg-primary text-white" : "bg-white text-ink-soft hover:text-ink"}`}>{label} <span className="opacity-70">({n})</span></Link>;
   const exportQs = new URLSearchParams(Object.entries({ status: sp.status, q: sp.q, from: sp.from, to: sp.to }).filter(([, v]) => v) as [string, string][]);
   return (

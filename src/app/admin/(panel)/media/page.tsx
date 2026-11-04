@@ -1,7 +1,5 @@
 import { requireStaff } from "@/lib/auth";
 import Link from "next/link";
-import { db, schema as s } from "@/db";
-import { desc, eq, sql } from "drizzle-orm";
 import { PageHeader, Card, Field, SubmitButton, ConfirmButton, FlashToast } from "@/components/admin/ui";
 import { Pagination } from "@/components/store/ShopView";
 import { MediaUploader } from "@/components/admin/MediaUploader";
@@ -10,6 +8,7 @@ import { SelectAllButton } from "@/components/admin/SelectAllButton";
 import { mediaWhere } from "@/lib/admin/media";
 import { updateMedia, removeMedia, bulkMedia } from "./actions";
 import { formatDate } from "@/lib/format";
+import { prisma } from "@/lib/prisma";
 
 export const metadata = { title: "Media library" };
 export const dynamic = "force-dynamic";
@@ -19,12 +18,13 @@ export default async function Media({ searchParams }: { searchParams: Promise<{ 
   const unused = sp.show === "unused";
   const where = mediaWhere(sp.q, unused);
   const keep = { ...(sp.q ? { q: sp.q } : {}), ...(unused ? { show: "unused" } : {}) };
-  const [rows, [{ total }]] = await Promise.all([
-    db.select().from(s.media).where(where).orderBy(desc(s.media.id)).limit(per).offset((page - 1) * per),
-    db.select({ total: sql<number>`COUNT(*)` }).from(s.media).where(where),
+  const [ids, [{ total }]] = await Promise.all([
+    prisma.$queryRaw<{ id: number }[]>`SELECT id FROM media WHERE ${where} ORDER BY id DESC LIMIT ${per} OFFSET ${(page - 1) * per}`,
+    prisma.$queryRaw<{ total: bigint }[]>`SELECT COUNT(*) AS total FROM media WHERE ${where}`,
   ]);
-  const sel = sp.id ? await db.query.media.findFirst({ where: eq(s.media.id, Number(sp.id)) }) : null;
-  const usedBy = sel ? await db.select({ id: s.products.id, name: s.products.name }).from(s.productImages).innerJoin(s.products, eq(s.products.id, s.productImages.productId)).where(eq(s.productImages.mediaId, sel.id)) : [];
+  const rows = await prisma.media.findMany({ where: { id: { in: ids.map((r) => r.id) } }, orderBy: { id: "desc" } });
+  const sel = sp.id ? await prisma.media.findUnique({ where: { id: Number(sp.id) } }) : null;
+  const usedBy = sel ? (await prisma.productImage.findMany({ where: { mediaId: sel.id }, select: { product: { select: { id: true, name: true } } } })).map((r) => r.product) : [];
   return (
     <>
       <FlashToast />

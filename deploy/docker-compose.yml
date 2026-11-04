@@ -1,0 +1,76 @@
+# Run from the project root with:  docker compose -f deploy/docker-compose.yml up -d
+# On your PC, start just the database:  docker compose -f deploy/docker-compose.yml up -d db
+#
+# Postgres and the store run in containers; the web server (Apache/nginx) runs
+# natively on the host and reverse-proxies to the app's published port.
+#
+# Needs a `deploy/.env` file (separate from the app's own .env.local / .env.docker)
+# holding just: POSTGRES_PASSWORD=<generate a strong one>
+# and optionally DB_HOST_PORT. This is docker compose's own variable file, not read by the app.
+
+# Fixed project name: without it compose names the project after this folder
+# ("deploy"), which clashes with Powershop's containers on the same machine.
+name: luckybrand
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # Sized for a server with ~8GB RAM shared with Powershop: modest buffers.
+    # random_page_cost 1.1 because the disk is SSD/NVMe.
+    # Applied only when the db container is recreated:
+    #   docker compose -f deploy/docker-compose.yml up -d db
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "random_page_cost=1.1"
+    shm_size: 512mb
+    environment:
+      POSTGRES_USER: luckybrand
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: luckybrand
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Localhost only: reachable for prisma migrate / psql / pg_dump from the
+      # host, never from the internet. Defaults to 5432; deploy/.env sets 5434
+      # on the dev PC because Powershop's database already uses 5433.
+      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luckybrand"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: luckybrand-store
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../.env.docker
+    environment:
+      # Inside the compose network the database is `db`, not localhost.
+      DATABASE_URL: postgresql://luckybrand:${POSTGRES_PASSWORD}@db:5432/luckybrand
+    volumes:
+      - ../storage/uploads:/app/storage/uploads
+      - nextcache:/app/.next/cache # resized images survive updates
+    ports:
+      # local only: the web server forwards the public traffic here
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
+  nextcache:

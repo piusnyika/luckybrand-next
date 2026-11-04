@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, like, ne, or } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
-import { db, schema as s } from "@/db";
 import { effectivePrice } from "@/lib/catalog";
+import { prisma } from "@/lib/prisma";
 
 /** Admin product lookup by SKU or name (bundle editor). Excludes bundles and trashed products. */
 export async function GET(req: NextRequest) {
   const u = await getCurrentUser(); if (!u || u.role === "customer") return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const q = (req.nextUrl.searchParams.get("q") || "").trim();
   if (q.length < 2) return NextResponse.json([]);
-  const rows = await db.select({ p: s.products, image: s.media.url }).from(s.products).leftJoin(s.media, eq(s.media.id, s.products.imageId))
-    .where(and(ne(s.products.status, "trash"), eq(s.products.type, "simple"), or(eq(s.products.sku, q), like(s.products.sku, `%${q}%`), like(s.products.name, `%${q}%`))))
-    .orderBy(asc(s.products.name)).limit(12);
+  const rows = (await prisma.product.findMany({
+    where: { status: { not: "trash" }, type: "simple", OR: [{ sku: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }] },
+    include: { image: { select: { url: true } } }, orderBy: { name: "asc" }, take: 12,
+  })).map(({ image, ...p }) => ({ p, image: image?.url ?? null }));
   // exact SKU match first
   rows.sort((a, b) => Number(b.p.sku?.toLowerCase() === q.toLowerCase()) - Number(a.p.sku?.toLowerCase() === q.toLowerCase()));
   return NextResponse.json(rows.map(({ p, image }) => ({

@@ -1,15 +1,14 @@
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
-import { db, schema as s } from "@/db";
-import { eq } from "drizzle-orm";
 import { categoryPath } from "@/lib/catalog";
 import { stripHtml } from "@/lib/format";
 import { ShopView, type ShopSearchParams } from "@/components/store/ShopView";
+import { prisma } from "@/lib/prisma";
 
 async function resolve(slugs: string[]) {
   let page: number | undefined;
   if (slugs.length >= 3 && slugs[slugs.length - 2] === "page") { page = Number(slugs[slugs.length - 1]); slugs = slugs.slice(0, -2); }
-  const cat = await db.query.categories.findFirst({ where: eq(s.categories.slug, slugs[slugs.length - 1]) });
+  const cat = await prisma.category.findUnique({ where: { slug: slugs[slugs.length - 1] } });
   if (!cat) return null;
   const path = await categoryPath(cat);
   return { cat, path, page, canonical: "/product-category/" + path.map((c) => c.slug).join("/") + "/", requested: "/product-category/" + slugs.join("/") + "/" };
