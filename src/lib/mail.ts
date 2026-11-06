@@ -15,11 +15,21 @@ function tx() {
   return transport;
 }
 
-export async function sendMail(to: string, subject: string, html: string, replyTo?: string) {
+export async function sendMail(to: string, subject: string, html: string, replyTo?: string, bcc?: string | string[]) {
   const t = tx();
-  if (!t) { console.log(`[mail disabled] to=${to} subject=${subject}`); return; }
+  if (!t) { console.log(`[mail disabled] to=${to} subject=${subject}${bcc ? ` bcc=${Array.isArray(bcc) ? bcc.join(",") : bcc}` : ""}`); return; }
   const site = await getSite();
-  await t.sendMail({ from: process.env.MAIL_FROM || `"${site.name}" <${process.env.SMTP_USER}>`, to, subject, html, replyTo });
+  await t.sendMail({ from: process.env.MAIL_FROM || `"${site.name}" <${process.env.SMTP_USER}>`, to, subject, html, replyTo, bcc });
+}
+
+/** Customer-facing email (order received, status update, resent invoice, password reset): also sent as BCC to Admin → Settings → Notifications → Customer email BCC. */
+export async function sendCustomerMail(to: string, subject: string, html: string, replyTo?: string) {
+  const { getSetting } = await import("./settings");
+  const n = await getSetting<import("./settings").NotificationSettings>("notifications");
+  // skip BCC addresses that already match the recipient (no duplicate copy)
+  const lower = to.toLowerCase();
+  const bcc = (n.customerEmailBcc ?? []).filter((e) => e && e.toLowerCase() !== lower);
+  await sendMail(to, subject, html, replyTo, bcc.length ? bcc : undefined);
 }
 
 export async function layout(title: string, body: string) {
@@ -77,14 +87,14 @@ export async function sendOrderEmails(orderId: number, status: string, previous:
     await notifyOrderOnWhatsApp(o);
     await sendMail(admin, `[${site.name}] New order #${o.number}`, await layout(`New order: #${o.number}`,
       `<p>You’ve received the following order from ${escapeHtml(`${o.billing?.firstName ?? ""} ${o.billing?.lastName ?? ""}`)}:</p>${orderTable(o)}<p><a href="${base}/admin/orders/${o.id}/">View in admin</a></p>`), o.email);
-    await sendMail(o.email, `Your ${site.name} order has been received!`, await layout("Thank you for your order",
+    await sendCustomerMail(o.email, `Your ${site.name} order has been received!`, await layout("Thank you for your order",
       `<p>Hi ${name},</p><p>${status === "on-hold" ? "Your order is on hold until we confirm payment has been received." : "We have finished processing your payment and your order is now being prepared."}</p>
        <p><strong>Order #${o.number}</strong></p>${orderTable(o)}<p><a href="${viewUrl}" style="color:#004798">View your order</a></p>`));
   } else if (status === "completed") {
-    await sendMail(o.email, `Your ${site.name} order is now complete`, await layout("Thanks for shopping with us",
+    await sendCustomerMail(o.email, `Your ${site.name} order is now complete`, await layout("Thanks for shopping with us",
       `<p>Hi ${name},</p><p>We have finished processing your order #${o.number}.</p>${orderTable(o)}`));
   } else if (status === "cancelled" || status === "failed" || status === "refunded") {
     await sendMail(admin, `[${site.name}] Order #${o.number} ${STATUS_LABEL[status].toLowerCase()}`, await layout(`Order #${o.number} ${STATUS_LABEL[status].toLowerCase()}`, orderTable(o)));
-    if (status !== "failed") await sendMail(o.email, `Your ${site.name} order #${o.number} has been ${status}`, await layout(`Order ${status}`, `<p>Hi ${name},</p><p>Your order #${o.number} has been ${status}.</p>${orderTable(o)}`));
+    if (status !== "failed") await sendCustomerMail(o.email, `Your ${site.name} order #${o.number} has been ${status}`, await layout(`Order ${status}`, `<p>Hi ${name},</p><p>Your order #${o.number} has been ${status}.</p>${orderTable(o)}`));
   }
 }

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireStaff } from "@/lib/admin/guard";
 import { setOrderStatus, addNote, getOrder } from "@/lib/orders";
 import { ORDER_STATUSES } from "@/lib/format";
-import { sendMail, layout, orderTable } from "@/lib/mail";
+import { sendMail, sendCustomerMail, layout, orderTable } from "@/lib/mail";
 import { getSite } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 
@@ -27,7 +27,7 @@ export async function addOrderNote(fd: FormData) {
     await addNote(id, content, isCustomer, u.displayName || u.email);
     if (isCustomer) {
       const o = await getOrder(id); const site = await getSite();
-      if (o) await sendMail(o.email, `Note added to your ${site.name} order #${o.number}`, await layout("A note has been added to your order", `<p>Hi ${o.billing?.firstName ?? ""},</p><blockquote style="border-left:3px solid #004798;margin:0;padding:8px 16px;background:#f8f9fa">${content.replace(/</g, "&lt;").replace(/\n/g, "<br>")}</blockquote>${orderTable(o)}`)).catch(console.error);
+      if (o) await sendCustomerMail(o.email, `Note added to your ${site.name} order #${o.number}`, await layout("A note has been added to your order", `<p>Hi ${o.billing?.firstName ?? ""},</p><blockquote style="border-left:3px solid #004798;margin:0;padding:8px 16px;background:#f8f9fa">${content.replace(/</g, "&lt;").replace(/\n/g, "<br>")}</blockquote>${orderTable(o)}`)).catch(console.error);
     }
   }
   redirect(`/admin/orders/${id}/?msg=Note%20added`);
@@ -36,7 +36,7 @@ export async function addOrderNote(fd: FormData) {
 export async function resendEmail(fd: FormData) {
   await requireStaff(); const id = Number(fd.get("id"));
   const o = await getOrder(id); if (!o) return; const site = await getSite();
-  await sendMail(o.email, `Your ${site.name} order #${o.number}`, await layout(`Order #${o.number}`, `<p>Hi ${o.billing?.firstName ?? ""}, here are the details of your order.</p>${orderTable(o)}`));
+  await sendCustomerMail(o.email, `Your ${site.name} order #${o.number}`, await layout(`Order #${o.number}`, `<p>Hi ${o.billing?.firstName ?? ""}, here are the details of your order.</p>${orderTable(o)}`));
   await addNote(id, "Order details emailed to customer.", false, "system");
   redirect(`/admin/orders/${id}/?msg=Email%20sent`);
 }

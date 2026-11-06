@@ -2,7 +2,7 @@
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
-import { escapeHtml, layout, mailButton, sendMail, staffEmails } from "@/lib/mail";
+import { escapeHtml, layout, mailButton, sendMail, sendCustomerMail, staffEmails } from "@/lib/mail";
 import { getSite } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 
@@ -31,7 +31,7 @@ export async function submitQuote(_: QuoteState, fd: FormData): Promise<QuoteSta
   if (to.length) await sendMail(to.join(", "), `[${site.name}] Quote request #${q.id} from ${name}`, await layout(`Quote request #${q.id}`,
     `<p><strong>${escapeHtml(name)}</strong>${company ? `, ${escapeHtml(company)}` : ""}${city ? ` (${escapeHtml(city)})` : ""}<br>${escapeHtml(email)} · ${escapeHtml(phone)}</p>${list}
      ${message ? `<p style="white-space:pre-line">${escapeHtml(message)}</p>` : ""}${mailButton(`${base}/admin/quotes/${q.id}/`, "Open in admin")}`), email).catch((e) => console.error("quote mail:", e));
-  await sendMail(email, `We received your quote request (#${q.id})`, await layout("Thanks for your quote request",
+  await sendCustomerMail(email, `We received your quote request (#${q.id})`, await layout("Thanks for your quote request",
     `<p>Hi ${escapeHtml(name.split(" ")[0])},</p><p>We've received your request and will get back to you with prices and availability, usually within one working day.</p>${list}
      <p>Reference: <strong>#${q.id}</strong></p>`)).catch((e) => console.error("quote mail:", e));
   return { ok: `Thank you! Your request #${q.id} has been sent. We'll contact you at ${email} or ${phone}, usually within one working day.` };
