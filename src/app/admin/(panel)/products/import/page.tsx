@@ -19,6 +19,7 @@ const COLS: [string, string][] = [
   ["bundle_items", "Makes the product a bundle: SKU*quantity separated with |, e.g. SOL-INV-5K*1 | BAT-200AH*2. Its price and stock then come from those products, so any price in the file is ignored. Put - to turn a bundle back into a single product."],
   ["images", "Image links separated with |. The first one is the main image. Links are downloaded into the media library; existing /uploads/ files are reused."],
   ["short_description, description", "Text or HTML"],
+  ["specification", "HTML, usually a table: shown in the product’s Specifications tab. Tables inside the description can be moved here automatically (option above the Check file button)."],
   ["low_stock_amount, weight, badge_text, seo_title, seo_description", "Optional"],
 ];
 

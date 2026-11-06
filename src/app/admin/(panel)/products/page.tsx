@@ -6,7 +6,8 @@ import { descendantIds, getAllCategories, effectivePrice } from "@/lib/catalog";
 import { money } from "@/lib/format";
 import { PageHeader, Badge, Table, th, td, Empty, FlashToast } from "@/components/admin/ui";
 import { Pagination } from "@/components/store/ShopView";
-import { bulkProducts } from "./actions";
+import { bulkProducts, moveAllDescriptionTables, undoMoveDescriptionTables, keepMovedDescriptionTables } from "./actions";
+import { ConfirmButton, SubmitButton } from "@/components/admin/ui-client";
 import { BulkBar } from "@/components/admin/BulkBar";
 import { purgeExpiredTrash, TRASH_DAYS } from "@/lib/admin/product-trash";
 import { prisma, Prisma } from "@/lib/prisma";
@@ -40,6 +41,12 @@ export default async function Products({ searchParams }: { searchParams: Promise
   const tabs: [string, string, number][] = [["", "All", count("published") + count("draft")], ["published", "Published", count("published")], ["draft", "Drafts", count("draft")], ["trash", "Trash", count("trash")]];
   const qs = new URLSearchParams(Object.entries(sp).filter(([k, v]) => v && k !== "page") as [string, string][]);
   const pages = Math.ceil(Number(total) / per);
+  // tidy-up banner: tables sitting in descriptions, or a recent move that can still be undone
+  const [withTables, tablesBackup] = await Promise.all([
+    prisma.product.count({ where: { status: { not: "trash" }, description: { contains: "<table", mode: "insensitive" } } }),
+    prisma.setting.findUnique({ where: { key: "specTablesBackup" } }),
+  ]);
+  const backupInfo = tablesBackup?.value as { at: string; items: unknown[] } | undefined;
   return (
     <>
       <FlashToast />
@@ -47,6 +54,18 @@ export default async function Products({ searchParams }: { searchParams: Promise
         <Link href="/admin/products/import/" className="btn-outline h-10 text-sm">Import / export</Link>
         <Link href="/admin/products/new/" className="btn-primary h-10 text-sm">+ Add product</Link>
       </>} />
+      {backupInfo?.items?.length ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-base border border-green-200 bg-green-50 px-4 py-3 text-sm">
+          <span className="flex-1">Tables were moved from descriptions to Specifications in <strong>{backupInfo.items.length} products</strong> on {new Date(backupInfo.at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}. Check a few products in the store, then keep or undo.</span>
+          <form action={undoMoveDescriptionTables}><ConfirmButton message="Put all those descriptions and specifications back as they were?" className="btn-outline h-9 bg-white text-sm">Undo</ConfirmButton></form>
+          <form action={keepMovedDescriptionTables}><SubmitButton className="btn-primary h-9 text-sm" pendingText="…">Keep</SubmitButton></form>
+        </div>
+      ) : withTables > 0 ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-base border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <span className="flex-1"><strong>{withTables} products</strong> have a table inside their description. Move them to each product’s <strong>Specifications</strong> tab, where they read better? You can undo this afterwards.</span>
+          <form action={moveAllDescriptionTables}><ConfirmButton message={`Move the description tables of ${withTables} products to Specifications? You can undo this afterwards.`} className="btn-primary h-9 text-sm">Move tables to Specifications</ConfirmButton></form>
+        </div>
+      ) : null}
       <nav className="mb-3 flex flex-wrap gap-1 text-sm">
         {tabs.map(([v, label, n]) => (
           <Link key={v} href={v ? `/admin/products/?status=${v}` : "/admin/products/"}

@@ -142,3 +142,44 @@ export async function quickEdit(fd: FormData) {
   await refreshBundleStock([id]);
   refreshStore();
 }
+
+/* ---------- tidy-up: tables in descriptions → Specifications (Products page banner) ---------- */
+const TABLES_BACKUP = "specTablesBackup";
+type TablesBackup = { at: string; items: { id: number; description: string | null; specification: string | null }[] };
+
+/** Moves the tables of every product's description into its Specifications. Keeps the previous text so it can be undone. */
+export async function moveAllDescriptionTables() {
+  await requireStaff();
+  const { moveTablesToSpec } = await import("@/lib/spec-tables");
+  const rows = await prisma.product.findMany({ where: { description: { contains: "<table", mode: "insensitive" } }, select: { id: true, description: true, specification: true } });
+  const changed = rows.map((r) => ({ r, x: moveTablesToSpec(r.description, r.specification) }))
+    .filter(({ r, x }) => x.description !== (r.description ?? "") || x.specification !== (r.specification ?? ""));
+  if (!changed.length) redirect("/admin/products/?msg=No%20tables%20to%20move");
+  const backup: TablesBackup = { at: new Date().toISOString(), items: changed.map(({ r }) => r) };
+  await prisma.setting.upsert({ where: { key: TABLES_BACKUP }, create: { key: TABLES_BACKUP, value: backup }, update: { value: backup } });
+  await prisma.$transaction(changed.map(({ r, x }) => prisma.product.update({ where: { id: r.id }, data: { description: x.description, specification: x.specification } })));
+  const moved = changed.reduce((n, c) => n + c.x.moved, 0);
+  refreshStore();
+  redirect(`/admin/products/?msg=${encodeURIComponent(`Moved ${moved} tables to Specifications in ${changed.length} products`)}`);
+}
+
+/** Puts back the descriptions and specifications from before the last "move tables" */
+export async function undoMoveDescriptionTables() {
+  await requireStaff();
+  const row = await prisma.setting.findUnique({ where: { key: TABLES_BACKUP } });
+  const b = row?.value as TablesBackup | undefined;
+  if (!b?.items?.length) redirect("/admin/products/?msg=Nothing%20to%20undo");
+  await prisma.$transaction([
+    ...b.items.map((i) => prisma.product.updateMany({ where: { id: i.id }, data: { description: i.description, specification: i.specification } })),
+    prisma.setting.delete({ where: { key: TABLES_BACKUP } }),
+  ]);
+  refreshStore();
+  redirect(`/admin/products/?msg=${encodeURIComponent(`Restored ${b.items.length} products`)}`);
+}
+
+/** Keep the change: forget the backup */
+export async function keepMovedDescriptionTables() {
+  await requireStaff();
+  await prisma.setting.deleteMany({ where: { key: TABLES_BACKUP } });
+  redirect("/admin/products/?msg=Done");
+}

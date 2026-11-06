@@ -3,6 +3,7 @@ import path from "path";
 import { lookup } from "dns/promises";
 import { prisma, type Prisma } from "@/lib/prisma";
 import { slugify } from "../format";
+import { hasTables, moveTablesToSpec } from "../spec-tables";
 import { saveUpload } from "./media";
 import { parseBundleSpec, formatBundleSpec, resolveBundleItems, setBundleItems, refreshBundleStock } from "../bundles";
 
@@ -10,7 +11,7 @@ import { parseBundleSpec, formatBundleSpec, resolveBundleItems, setBundleItems, 
 export const COLUMNS = [
   "id", "sku", "name", "slug", "status", "regular_price", "sale_price", "sale_from", "sale_to",
   "manage_stock", "stock_qty", "stock_status", "low_stock_amount", "weight", "featured", "badge_text",
-  "categories", "brands", "tags", "images", "bundle_items", "short_description", "description", "seo_title", "seo_description",
+  "categories", "brands", "tags", "images", "bundle_items", "short_description", "description", "specification", "seo_title", "seo_description",
 ] as const;
 type Col = (typeof COLUMNS)[number];
 
@@ -87,7 +88,7 @@ export async function exportProductsCsv() {
         (primary && c.includes(primary) ? [primary, ...c.filter((x) => x !== primary)] : c).join(" | "),
         (pbrands.get(p.id) ?? []).join(" | "), (ptags.get(p.id) ?? []).join(" | "), (pimgs.get(p.id) ?? []).join(" | "),
         p.type === "bundle" ? formatBundleSpec(pbundle.get(p.id) ?? []) : "",
-        p.shortDescription ?? "", p.description ?? "", p.seoTitle, p.seoDescription ?? "",
+        p.shortDescription ?? "", p.description ?? "", p.specification ?? "", p.seoTitle, p.seoDescription ?? "",
       ];
     }),
   ]);
@@ -98,7 +99,7 @@ export function templateCsv() {
     [...COLUMNS],
     ["", "SAM-A15-128", "Samsung Galaxy A15 128GB", "", "published", "199.00", "179.00", "", "", "1", "12", "", "2", "0.4", "0", "New",
       "Phones > Smartphones", "Samsung", "android | 4g", "https://example.com/a15-front.jpg | https://example.com/a15-back.jpg", "",
-      "<p>6.5\" display, 128GB storage.</p>", "<p>Full description here.</p>", "", ""],
+      "<p>6.5\" display, 128GB storage.</p>", "<p>Full description here.</p>", "<table><tr><td>Screen</td><td>6.5 inch</td></tr></table>", "", ""],
   ]);
 }
 
@@ -202,7 +203,8 @@ export async function downloadImage(link: URL) {
 }
 const bool = (v: string) => (/^(1|yes|y|true)$/i.test(v) ? true : /^(0|no|n|false)$/i.test(v) ? false : null);
 
-export async function importProducts(text: string, dryRun: boolean): Promise<ImportReport> {
+/** moveTables: tables found in a description are moved to the product's Specifications (see src/lib/spec-tables.ts) */
+export async function importProducts(text: string, dryRun: boolean, { moveTables = true }: { moveTables?: boolean } = {}): Promise<ImportReport> {
   const all = parseCsv(text);
   while (all.length && blank(all[0])) all.shift();
   const dataRows = all.slice(1).filter((r) => !blank(r)).length;
@@ -383,6 +385,13 @@ export async function importProducts(text: string, dryRun: boolean): Promise<Imp
       const badge = text("badge_text"); if (badge !== undefined) patch.badgeText = badge ?? "";
       const sd = text("short_description"); if (sd !== undefined) patch.shortDescription = sd?.replace(/\\n/g, "\n") ?? "";
       const de = text("description"); if (de !== undefined) patch.description = de?.replace(/\\n/g, "\n") ?? "";
+      const spc = text("specification"); if (spc !== undefined) patch.specification = spc?.replace(/\\n/g, "\n") ?? "";
+      if (moveTables && hasTables(patch.description)) {
+        const r = moveTablesToSpec(patch.description, patch.specification ?? existing?.specification ?? "");
+        patch.description = r.description; patch.specification = r.specification;
+        if (r.moved) notes.push(`Moved ${r.moved} table${r.moved === 1 ? "" : "s"} from the description to Specifications`);
+        if (r.duplicates) notes.push(`Removed ${r.duplicates} description table${r.duplicates === 1 ? "" : "s"} already in Specifications`);
+      }
       const seoT = text("seo_title"); if (seoT !== undefined) patch.seoTitle = seoT ?? "";
       const seoD = text("seo_description"); if (seoD !== undefined) patch.seoDescription = seoD ?? "";
 

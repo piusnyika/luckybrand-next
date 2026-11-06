@@ -10,7 +10,7 @@ export async function runProductImport(fd: FormData): Promise<ImportReport | { e
   if (f.size > 10 * 1024 * 1024) return { error: "The file is larger than 10 MB. Please split it into smaller files." };
   const dryRun = fd.get("mode") !== "import";
   try {
-    const r = await importProducts(await f.text(), dryRun);
+    const r = await importProducts(await f.text(), dryRun, { moveTables: fd.get("moveTables") === "1" });
     if (!dryRun && (r.created || r.updated)) refreshStore();
     return r;
   } catch (e: any) { return { error: e.message || String(e) }; }

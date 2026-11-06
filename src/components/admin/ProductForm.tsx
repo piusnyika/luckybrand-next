@@ -6,6 +6,7 @@ import { SubmitButton, ConfirmButton } from "./ui-client";
 import { Icon } from "../Icon";
 import { BundleEditor, type BundleRow } from "./BundleEditor";
 import { SeoPanel } from "./SeoPanel";
+import { hasTables, moveTablesToSpec } from "@/lib/spec-tables";
 
 type Opt = { id: number; name: string; parentId?: number | null };
 type P = Record<string, any> | null;
@@ -32,6 +33,12 @@ export function ProductForm({ action, deleteAction, product: p, images: initImag
   const [keyword, setKeyword] = useState<string>(p?.focusKeyword ?? "");
   const [shortHtml, setShortHtml] = useState<string>(p?.shortDescription ?? ""); const [descHtml, setDescHtml] = useState<string>(p?.description ?? ""); const [specHtml, setSpecHtml] = useState<string>(p?.specification ?? "");
   const [copyKey, setCopyKey] = useState(0);
+  const [moveNote, setMoveNote] = useState("");
+  const moveTables = () => {
+    const r = moveTablesToSpec(descHtml, specHtml);
+    setDescHtml(r.description); setSpecHtml(r.specification); setCopyKey((k) => k + 1);
+    setMoveNote([r.moved && `Moved ${r.moved} table${r.moved === 1 ? "" : "s"} to Specifications.`, r.duplicates && `Removed ${r.duplicates} already in Specifications.`].filter(Boolean).join(" ") || "Nothing to move: the only table was a single box, now plain text.");
+  };
   const [slug, setSlug] = useState<string>(p?.slug ?? "");
   const attrList = attrs.filter((a) => a.name.trim()).map((a) => ({ name: a.name.trim(), values: a.values.split("|").map((v) => v.trim()).filter(Boolean) }));
   const tree = useMemo(() => {
@@ -63,7 +70,14 @@ export function ProductForm({ action, deleteAction, product: p, images: initImag
           <F label="URL slug" hint="Leave blank to generate from the name. Changing it changes the product URL."><div className="flex items-center"><span className="flex h-[46px] items-center rounded-l-form border border-r-0 border-line bg-surface px-3 text-sm text-ink-muted">/product/</span><input name="slug" value={slug} onChange={(e) => setSlug(e.target.value)} className="field rounded-l-none" /></div></F>
           <F label="Short description"><RichText key={"s" + copyKey} name="shortDescription" defaultValue={shortHtml} onChange={setShortHtml} minHeight={100} /></F>
           <F label="Description"><RichText key={"d" + copyKey} name="description" defaultValue={descHtml} onChange={setDescHtml} minHeight={260} /></F>
-          <F label="Specification table (optional)" hint="Shown in its own “Specifications” tab next to Description, together with the attributes below. Paste a table or use the Table button."><RichText name="specification" defaultValue={p?.specification} onChange={setSpecHtml} minHeight={120} /></F>
+          {hasTables(descHtml) && (
+            <div className="-mt-2 flex flex-wrap items-center gap-3 rounded-form border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm">
+              <span className="flex-1">This description contains a table. Specification tables read better in their own <strong>Specifications</strong> tab.</span>
+              <button type="button" onClick={moveTables} className="btn-outline h-9 bg-white text-sm">Move tables to Specifications</button>
+            </div>
+          )}
+          {moveNote && <p className="-mt-2 text-sm text-success">{moveNote} Check below, then save the product.</p>}
+          <F label="Specification table (optional)" hint="Shown in its own “Specifications” tab next to Description, together with the attributes below. Paste a table or use the Table button."><RichText key={"sp" + copyKey} name="specification" defaultValue={specHtml} onChange={setSpecHtml} minHeight={120} /></F>
         </Card>
         <Card title="Images">
           <div className="flex flex-wrap gap-3">

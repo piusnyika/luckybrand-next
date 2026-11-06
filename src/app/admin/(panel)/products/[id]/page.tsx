@@ -15,7 +15,9 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function EditProduct({ params }: { params: Promise<{ id: string }> }) {
   await requireStaff(); // layouts can be skipped on partial requests: every page must check for itself
   const { id } = await params; const isNew = id === "new";
-  const p = isNew ? null : await prisma.product.findUnique({ where: { id: Number(id) } });
+  const found = isNew ? null : await prisma.product.findUnique({ where: { id: Number(id) } });
+  // a plain copy: Prisma result objects carry a hidden symbol property that React refuses to pass to client components
+  const p = found && (Object.fromEntries(Object.entries(found)) as typeof found);
   if (!isNew && !p) notFound();
   const bundle = p?.type === "bundle" ? (await getBundleItems([p.id])).get(p.id) ?? [] : [];
   const [cats, brands, tags, rel] = await Promise.all([

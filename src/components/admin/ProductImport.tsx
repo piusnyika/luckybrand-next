@@ -16,12 +16,13 @@ export function ProductImport() {
   const [report, setReport] = useState<ImportReport | null>(null);
   const [error, setError] = useState("");
   const [onlyIssues, setOnlyIssues] = useState(false);
+  const [moveTables, setMoveTables] = useState(true);
   const [pending, start] = useTransition();
 
   const run = (mode: "check" | "import") => {
     if (!file) return;
     if (mode === "import" && !window.confirm("Import these products now? Matching products will be updated.")) return;
-    const fd = new FormData(); fd.set("file", file); fd.set("mode", mode);
+    const fd = new FormData(); fd.set("file", file); fd.set("mode", mode); if (moveTables) fd.set("moveTables", "1");
     setError("");
     start(async () => {
       const r = await runProductImport(fd);
@@ -32,6 +33,7 @@ export function ProductImport() {
 
   return (
     <div className="space-y-5">
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={moveTables} onChange={(e) => { setMoveTables(e.target.checked); setReport(null); }} className="accent-primary" /> Move tables found in descriptions to the Specifications tab</label>
       <div className="flex flex-wrap items-center gap-3">
         <input type="file" accept=".csv,text/csv" className="text-sm" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setReport(null); setError(""); }} />
         <button type="button" disabled={!file || pending} onClick={() => run("check")} className="btn-outline h-10 text-sm">{pending && !report ? "Checking…" : "Check file"}</button>
