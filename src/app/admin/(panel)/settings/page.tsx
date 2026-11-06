@@ -44,11 +44,9 @@ export default async function Settings({ searchParams }: { searchParams: Promise
       </div><div className="mt-6 flex justify-end"><SubmitButton>Save changes</SubmitButton></div></Card></form>}
 
       {tab === "appearance" && <form action={saveAppearance}><div className="space-y-6">
-        <Card title="Notice bar (top of every page)"><div className="grid gap-4 md:grid-cols-[1fr_160px]">
-          <Field label="Text (HTML allowed, e.g. <strong>NOTICE</strong>)"><input name="noticeHtml" defaultValue={site.noticeHtml} className="field" /></Field>
-          <Field label="Background"><input type="color" name="noticeBg" defaultValue={site.noticeBg} className="field h-[46px] p-1" /></Field>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="noticeEnabled" defaultChecked={site.noticeEnabled} className="accent-primary" /> Show notice bar</label>
-        </div></Card>
+        <Card title="Announcement bar (top of every page)">
+          <p className="text-sm text-ink-soft">The notice bar now holds several messages with their own colours, links and dates. Edit them in <a href="/admin/announcements/" className="font-semibold text-primary hover:underline">Content → Announcements</a>.</p>
+        </Card>
         <Card title="Free shipping message (cart, cart drawer and My Cart hover preview)"><div className="grid gap-4 md:grid-cols-2">
           <Field label="Threshold ($)" hint="Order subtotal for free delivery. Leave blank to hide the message." className="md:col-span-2 md:max-w-xs"><input name="freeShippingThreshold" type="number" defaultValue={site.freeShippingThreshold ?? ""} className="field" /></Field>
           <Field label="Message while below the threshold" hint="[remaining] is replaced with the amount still needed, e.g. $35.00"><textarea name="freeShippingMessage" rows={3} defaultValue={site.freeShippingMessage} className="field" /></Field>
@@ -108,6 +106,8 @@ export default async function Settings({ searchParams }: { searchParams: Promise
             <div className="mt-4">{check("lowStock", <>Email staff when a product reaches its <strong>low-stock level</strong> (set per product; 2 if empty). One email per product until it&apos;s restocked.</>)}</div>
           </Card>
           <Card title="Customer emails"><div className="space-y-4">
+            <Field label="Also send a copy of every invoice and receipt to (BCC)" hint="One email address per line. Each order confirmation, status update, note and resent invoice sent to the customer is blind-copied here, so your office keeps a record. Leave blank to switch off.">
+              <textarea name="customerEmailBcc" rows={3} defaultValue={notify.customerEmailBcc.join("\n")} placeholder="web@lucky.co.zw" className="field h-auto py-2" /></Field>
             {check("backInStock", <><strong>Back in stock:</strong> out-of-stock products show &ldquo;Email me when it&apos;s back&rdquo;, and we email everyone who asked once it&apos;s in stock again.</>)}
             {check("abandonedCart", <><strong>Abandoned cart:</strong> remind logged-in customers who left items in their cart and haven&apos;t ordered (one reminder per cart, at most every 3 days).</>)}
             <Field label="Send the cart reminder after (hours)"><input name="abandonedCartHours" type="number" min={1} max={72} defaultValue={notify.abandonedCartHours} className="field max-w-[120px]" /></Field>

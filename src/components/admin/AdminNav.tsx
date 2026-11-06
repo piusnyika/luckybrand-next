@@ -15,14 +15,17 @@ const GROUPS: { title?: string; items: { href: string; label: string; icon: stri
   ] },
   { title: "Catalogue", items: [
     { href: "/admin/products/", label: "Products", icon: "box" },
+    { href: "/admin/specifications/", label: "Specifications", icon: "list" },
     { href: "/admin/categories/", label: "Categories", icon: "folder" },
     { href: "/admin/brands/", label: "Brands & tags", icon: "star" },
     { href: "/admin/media/", label: "Media library", icon: "image" },
     { href: "/admin/reviews/", label: "Reviews", icon: "star", badge: "reviews" },
     { href: "/admin/seo/", label: "SEO", icon: "search" },
+    { href: "/admin/search/", label: "Search", icon: "filter" },
   ] },
   { title: "Content", items: [
     { href: "/admin/homepage/", label: "Homepage", icon: "layout" },
+    { href: "/admin/announcements/", label: "Announcements", icon: "bell" },
     { href: "/admin/pages/", label: "Pages", icon: "file" },
     { href: "/admin/menus/", label: "Menus", icon: "menu" },
     { href: "/admin/messages/", label: "Messages", icon: "message", badge: "messages" },

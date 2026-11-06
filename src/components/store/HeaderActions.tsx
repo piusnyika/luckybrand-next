@@ -8,7 +8,7 @@ import { money } from "@/lib/format";
 
 type FreeShipping = { threshold: number | null; message: string; success: string };
 
-export function HeaderActions({ loggedIn, name, freeShipping }: { loggedIn: boolean; name: string; freeShipping: FreeShipping }) {
+export function HeaderActions({ loggedIn, name, freeShipping, children }: { loggedIn: boolean; name: string; freeShipping: FreeShipping; children?: React.ReactNode }) {
   const { count, setDrawerOpen, drawerOpen, ready } = useCart();
   // desktop: hovering "My Cart" previews the cart (small delay so moving onto the panel doesn't close it)
   const [hover, setHover] = useState(false);
@@ -18,6 +18,7 @@ export function HeaderActions({ loggedIn, name, freeShipping }: { loggedIn: bool
   useEffect(() => { if (drawerOpen) setHover(false); }, [drawerOpen]);
   return (
     <div className="ml-auto flex items-center gap-5 lg:ml-0">
+      {children}
       <Link href="/my-account/" className="hidden flex-col items-center text-[11px] font-medium text-ink hover:text-primary sm:flex">
         <Icon name="userCircle" size={24} /><span className="mt-1">{loggedIn ? (name ? `Hi, ${name}` : "My Account") : "My Account"}</span>
       </Link>

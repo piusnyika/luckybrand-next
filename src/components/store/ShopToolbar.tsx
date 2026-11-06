@@ -2,7 +2,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Icon } from "../Icon";
 
-export function ShopToolbar({ orderby, perPage, view }: { orderby: string; perPage: number; view: "grid" | "list" }) {
+export function ShopToolbar({ orderby, defaultSort = "date", perPage, view }: { orderby: string; defaultSort?: string; perPage: number; view: "grid" | "list" }) {
   const router = useRouter(); const path = usePathname(); const sp = useSearchParams();
   const set = (k: string, v: string | null) => {
     const u = new URLSearchParams(sp.toString()); if (v === null) u.delete(k); else u.set(k, v); u.delete("paged");
@@ -12,7 +12,8 @@ export function ShopToolbar({ orderby, perPage, view }: { orderby: string; perPa
   return (
     <div className="flex items-center gap-5 text-[13px]">
       <label className="relative flex items-center gap-1.5"><span className="hidden text-ink-muted sm:inline">Sort:</span>
-        <select value={orderby} onChange={(e) => set("orderby", e.target.value === "date" ? null : e.target.value)} className={sel}>
+        <select value={orderby} onChange={(e) => set("orderby", e.target.value === defaultSort ? null : e.target.value)} className={sel}>
+          {defaultSort === "relevance" && <option value="relevance">Sort by best match</option>}
           <option value="date">Sort by latest</option><option value="popularity">Sort by popularity</option>
           <option value="price">Sort by price: low to high</option><option value="price-desc">Sort by price: high to low</option>
         </select><Icon name="chevronDown" size={14} className="pointer-events-none absolute right-0" />

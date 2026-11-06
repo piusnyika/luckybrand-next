@@ -46,6 +46,8 @@ export type PaymentSettings = {
 export type NotificationSettings = {
   /** who gets staff alerts (low stock, quote requests); empty = the store email */
   staffEmails: string[];
+  /** blind-copied on every order confirmation, status update and invoice resend sent to a customer (one address per line) */
+  customerEmailBcc: string[];
   lowStock: boolean;
   backInStock: boolean;
   abandonedCart: boolean; abandonedCartHours: number;
@@ -58,6 +60,35 @@ export type SeoSettings = {
   aiModel: string;
   /** Google Search Console / Bing Webmaster verification codes (the content="…" part of their meta tag) */
   googleVerification: string; bingVerification: string;
+};
+/** One message in the announcement bar at the top of every page (Admin → Announcements) */
+export type Announcement = {
+  id: string;
+  /** short tag shown in bold before the text, e.g. "NOTICE", "NEW", "SALE" */
+  label: string;
+  /** plain text; **double asterisks** make words bold */
+  text: string;
+  /** optional: makes the message clickable */
+  link: string; linkLabel: string;
+  bg: string; color: string;
+  /** YYYY-MM-DD in Harare time, inclusive; empty = no limit */
+  startsOn: string; endsOn: string;
+  enabled: boolean;
+};
+export type AnnouncementSettings = {
+  enabled: boolean;
+  /** seconds each message shows before the next one */
+  seconds: number;
+  /** visitors may close the bar (it comes back when the messages change) */
+  dismissible: boolean;
+  items: Announcement[];
+};
+/** Admin → Search */
+export type SearchSettings = {
+  /** groups of words/phrases that mean the same thing, e.g. ["borehole", "submersible"] */
+  synonyms: string[][];
+  /** text shown in the empty header search box */
+  placeholder: string;
 };
 export type HomeSection =
   | { type: "product-carousel" | "product-grid"; title: string; linkLabel: string; link: string; source: "latest" | "featured" | "on_sale" | "best_selling" | "random"; categoryIds: number[]; limit: number; hideOutOfStock: boolean; banner: null | { image: string; title: string; subtitle: string; text: string; link: string } }
@@ -82,11 +113,23 @@ const DEFAULTS: Record<string, any> = {
   } satisfies PaymentSettings,
   homepage: { slides: [], sections: [] } satisfies HomepageSettings,
   notifications: {
-    staffEmails: [], lowStock: true, backInStock: true, abandonedCart: true, abandonedCartHours: 3,
+    staffEmails: [], customerEmailBcc: [], lowStock: true, backInStock: true, abandonedCart: true, abandonedCartHours: 3,
     whatsapp: false, whatsappTo: [], whatsappTemplate: "new_order_alert", whatsappLanguage: "en",
   } satisfies NotificationSettings,
   orderSequence: { next: 10000 },
   seo: { aiModel: "claude-opus-5-5", googleVerification: "", bingVerification: "" } satisfies SeoSettings,
+  search: {
+    placeholder: "Search generators, solar, pumps…",
+    synonyms: [
+      ["borehole", "submersible", "well pump"], ["genset", "generator"], ["geyser", "water heater"],
+      ["jackhammer", "jack hammer", "rock drill"], ["solar panel", "solar module", "pv panel"],
+      ["motorbike", "motorcycle", "motor bike"], ["aircon", "air conditioner", "air con"],
+      ["tiller", "rotavator", "cultivator"], ["welder", "welding machine"], ["pressure washer", "pressure cleaner"],
+      ["charge controller", "solar controller", "mppt"], ["maize sheller", "corn sheller"], ["hammer mill", "hammermill", "grinding mill"],
+      ["chainsaw", "chain saw"], ["lawn mower", "lawnmower", "grass cutter"], ["brush cutter", "brushcutter", "strimmer", "trimmer"],
+      ["stove", "cooker"], ["blower", "air blower"], ["pipe", "polypipe"],
+    ],
+  } satisfies SearchSettings,
 };
 
 export const getSetting = cache(async <T = any>(key: string): Promise<T> => {
@@ -100,4 +143,31 @@ export const getSite = () => getSetting<SiteSettings>("site");
 
 export async function saveSetting(key: string, value: any) {
   await prisma.setting.upsert({ where: { key }, create: { key, value: value as Prisma.InputJsonValue }, update: { value: value as Prisma.InputJsonValue } });
+}
+
+/** Announcement bar settings; until saved once, the old single notice (site.noticeHtml) is shown as the first message */
+export const getAnnouncements = cache(async (): Promise<AnnouncementSettings> => {
+  const row = await prisma.setting.findUnique({ where: { key: "announcements" } });
+  if (row) return { enabled: true, seconds: 6, dismissible: true, items: [], ...(row.value as Partial<AnnouncementSettings>) };
+  const site = await getSite();
+  const html = site.noticeHtml || "";
+  const lead = html.match(/^\s*<strong>([^<]{1,30})<\/strong>\s*/i);
+  const text = html.slice(lead ? lead[0].length : 0).replace(/<strong>\s*([^<]*?)[\s,]*<\/strong>/gi, (_, t) => (t.trim() ? `**${t.trim()}**` : ""))
+    .replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim().replace(/,$/, "");
+  return {
+    enabled: site.noticeEnabled, seconds: 6, dismissible: true,
+    items: text ? [{ id: "notice", label: lead?.[1].trim() ?? "", text, link: "", linkLabel: "", bg: site.noticeBg || "#ed1b24", color: "#ffffff", startsOn: "", endsOn: "", enabled: true }] : [],
+  };
+});
+
+/** Today's date in Zimbabwe, as YYYY-MM-DD */
+export const harareToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Harare", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
+/** The messages to show right now: switched on, inside their dates, with some text */
+export async function activeAnnouncements() {
+  const a = await getAnnouncements();
+  if (!a.enabled) return { items: [] as Announcement[], seconds: a.seconds, dismissible: a.dismissible };
+  const today = harareToday();
+  const items = a.items.filter((m) => m.enabled && m.text.trim() && (!m.startsOn || m.startsOn <= today) && (!m.endsOn || m.endsOn >= today));
+  return { items, seconds: a.seconds, dismissible: a.dismissible };
 }

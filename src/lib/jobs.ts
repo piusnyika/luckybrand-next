@@ -18,6 +18,15 @@ export async function runBackgroundJobs() {
   await run("abandonedCarts", n.abandonedCart, () => abandonedCarts(n.abandonedCartHours));
   await run("backInStock", n.backInStock, backInStock);
   await run("lowStock", n.lowStock, lowStock);
+  // search log (Admin → Search): forget searches nobody has made for a year
+  await run("searchLog", true, async () => {
+    // forget searches nobody has made for a year, plus keep at most 10,000 of the most recent (bot-flood protection)
+    const [a, b] = await Promise.all([
+      prisma.$executeRaw`DELETE FROM search_terms WHERE last_at < NOW() - INTERVAL '365 days'`,
+      prisma.$executeRaw`DELETE FROM search_terms WHERE id IN (SELECT id FROM search_terms ORDER BY last_at DESC OFFSET 10000)`,
+    ]);
+    return Number(a) + Number(b);
+  });
   return out;
 }
 

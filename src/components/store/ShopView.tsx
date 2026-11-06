@@ -6,6 +6,8 @@ import { ShopToolbar } from "./ShopToolbar";
 import { PriceFilter } from "./PriceFilter";
 import { MobileFilters } from "./MobileFilters";
 import { Icon } from "../Icon";
+import { logSearch } from "@/lib/search";
+import { getSite, salesContactsOf } from "@/lib/settings";
 
 export type ShopSearchParams = Record<string, string | undefined>;
 
@@ -15,15 +17,21 @@ export async function ShopView({
   title: string; intro?: string | null; basePath: string; breadcrumbs: { label: string; href?: string }[];
   filter: Pick<ListParams, "categoryIds" | "brandId" | "tagId">; sp: ShopSearchParams; activeCategoryIds?: number[]; page?: number;
 }) {
-  const sortMap: Record<string, ListParams["sort"]> = { date: "latest", price: "price", "price-desc": "price-desc", popularity: "popularity", rating: "popularity", menu_order: "latest" };
+  const search = sp.s?.trim() || undefined;
+  const defaultSort = search ? "relevance" : "date";
+  const orderby = sp.orderby || defaultSort;
+  const sortMap: Record<string, ListParams["sort"]> = { relevance: "relevance", date: "latest", price: "price", "price-desc": "price-desc", popularity: "popularity", rating: "popularity", menu_order: "latest" };
   const perPage = [12, 20, 30, 40, 60].includes(Number(sp.per_page)) ? Number(sp.per_page) : 20;
   const page = pageOverride ?? Math.max(1, Number(sp.paged || sp.page || 1));
   const params: ListParams = {
-    ...filter, search: sp.s || undefined, sort: sortMap[sp.orderby || "date"] ?? "latest", page, perPage,
+    ...filter, search, sort: sortMap[orderby] ?? "latest", page, perPage,
     inStock: sp.stock_status === "instock", onSale: sp.on_sale === "1",
     minPrice: sp.min_price ? Number(sp.min_price) : undefined, maxPrice: sp.max_price ? Number(sp.max_price) : undefined,
   };
-  const [res, tree, range, urls] = await Promise.all([listProducts(params), getCategoryTree(), priceRange(filter.categoryIds), categoryUrlMap()]);
+  const [res, tree, range, urls, site] = await Promise.all([listProducts(params), getCategoryTree(), priceRange(filter.categoryIds), categoryUrlMap(), getSite()]);
+  // count each submitted search once (first page, no extra filters) for Admin → Search
+  if (search && page === 1 && !sp.orderby && !sp.stock_status && !sp.on_sale && !sp.min_price && !sp.max_price) await logSearch(search, res.partial ? 0 : res.total);
+  const wa = (site.whatsapp || salesContactsOf(site)[0]?.phone || "").replace(/\D/g, "").replace(/^0/, "263");
   const view = sp.view === "list" ? "list" : "grid";
   const from = res.total ? (page - 1) * perPage + 1 : 0, to = Math.min(res.total, page * perPage);
 
@@ -65,10 +73,27 @@ export async function ShopView({
               <MobileFilters>{sidebar}</MobileFilters>
               <span className="text-xs text-ink-muted">Showing {from}–{to} of {res.total} results</span>
             </div>
-            <ShopToolbar orderby={sp.orderby || "date"} perPage={perPage} view={view} />
+            <ShopToolbar orderby={orderby} defaultSort={defaultSort} perPage={perPage} view={view} />
           </div>
+          {search && res.partial && res.items.length > 0 && (
+            <div className="mb-5 rounded-base border border-line bg-surface px-4 py-3 text-sm text-ink-soft">
+              No product matches all of “{search}”. These are the closest matches. Can’t find it?{" "}
+              {wa && <a href={`https://wa.me/${wa}?text=${encodeURIComponent(`Hello, I'm looking for: ${search}`)}`} target="_blank" rel="noopener" className="font-semibold text-primary hover:underline">Ask us on WhatsApp</a>}
+              {wa && " or "}<Link href="/request-a-quote/" className="font-semibold text-primary hover:underline">request a quote</Link>.
+            </div>
+          )}
           {res.items.length === 0 ? (
-            <div className="rounded-base border border-line bg-surface p-10 text-center text-ink-soft">No products were found matching your selection.</div>
+            <div className="rounded-base border border-line bg-surface p-10 text-center text-ink-soft">
+              {search ? (<>
+                <div className="text-base font-semibold text-ink">No products found for “{search}”</div>
+                <p className="mx-auto mt-2 max-w-[440px] text-sm">Check the spelling or try a more general word (for example “generator” instead of a model number). We also stock and source equipment that isn’t listed online, so just ask.</p>
+                <div className="mt-5 flex flex-wrap justify-center gap-3">
+                  {wa && <a href={`https://wa.me/${wa}?text=${encodeURIComponent(`Hello, I'm looking for: ${search}`)}`} target="_blank" rel="noopener"
+                    className="inline-flex items-center gap-2 rounded-form bg-[#25d366] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90"><Icon name="whatsapp" size={16} />Ask on WhatsApp</a>}
+                  <Link href="/request-a-quote/" className="inline-flex items-center gap-2 rounded-form border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:border-primary hover:text-primary"><Icon name="edit" size={16} />Request a quote</Link>
+                </div>
+              </>) : "No products were found matching your selection."}
+            </div>
           ) : view === "list" ? (
             <div className="space-y-4">{res.items.map((p) => <ProductRow key={p.id} p={p} />)}</div>
           ) : (

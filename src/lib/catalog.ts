@@ -2,6 +2,7 @@ import { cache } from "react";
 import { prisma, Prisma } from "@/lib/prisma";
 import type { Category as CategoryRow } from "@prisma/client";
 import type { StockStatus } from "@/lib/db-types";
+import { searchProducts, labelMatcher } from "@/lib/search";
 
 export type Category = CategoryRow & { children?: Category[]; count?: number };
 
@@ -93,7 +94,8 @@ export async function categoryUrlMap(): Promise<Map<number, string>> {
 /* ---------------- product listing ---------------- */
 export type ListParams = {
   categoryIds?: number[]; brandId?: number; tagId?: number; search?: string;
-  sort?: "latest" | "price" | "price-desc" | "popularity" | "name" | "random" | "menu_order";
+  /** relevance: best search match first (only meaningful with `search`; falls back to latest without it) */
+  sort?: "relevance" | "latest" | "price" | "price-desc" | "popularity" | "name" | "random" | "menu_order";
   page?: number; perPage?: number; inStock?: boolean; onSale?: boolean; featured?: boolean;
   minPrice?: number; maxPrice?: number; excludeIds?: number[]; includeDrafts?: boolean;
 };
@@ -110,9 +112,13 @@ export async function listProducts(p: ListParams = {}) {
   if (p.categoryIds?.length) where.push(await inCategories(p.categoryIds));
   if (p.brandId) where.push(Prisma.sql`p.id IN (SELECT product_id FROM product_brands WHERE brand_id = ${p.brandId})`);
   if (p.tagId) where.push(Prisma.sql`p.id IN (SELECT product_id FROM product_tags WHERE tag_id = ${p.tagId})`);
-  if (p.search) {
-    const words = p.search.trim().split(/\s+/).filter(Boolean).slice(0, 6);
-    for (const w of words) { const like = `%${likeEscape(w)}%`; where.push(Prisma.sql`(p.name ILIKE ${like} OR p.sku ILIKE ${like})`); }
+  // search: ranked ids from src/lib/search.ts (plurals, typos, sizes, synonyms, categories/brands); other filters still apply in SQL
+  let ranked: number[] | null = null, partial = false;
+  if (p.search?.trim()) {
+    const r = await searchProducts(p.search);
+    ranked = r.ids; partial = r.partial;
+    if (!ranked.length) return { items: [] as ProductCard[], total: 0, page: Math.max(1, p.page ?? 1), perPage: p.perPage ?? 20, pages: 1, partial: false };
+    where.push(Prisma.sql`p.id = ANY(${ranked}::int[])`);
   }
   if (p.inStock) where.push(Prisma.sql`p.stock_status <> 'outofstock'`);
   if (p.featured) where.push(Prisma.sql`p.featured = true`);
@@ -121,8 +127,10 @@ export async function listProducts(p: ListParams = {}) {
   if (p.maxPrice !== undefined) where.push(Prisma.sql`${priceExpr} <= ${p.maxPrice}`);
   if (p.excludeIds?.length) where.push(Prisma.sql`p.id NOT IN (${Prisma.join(p.excludeIds)})`);
 
+  const latest = Prisma.sql`p.created_at DESC, p.id DESC`;
   const order = {
-    latest: Prisma.sql`p.created_at DESC, p.id DESC`,
+    relevance: ranked ? Prisma.sql`array_position(${ranked}::int[], p.id)` : latest,
+    latest,
     price: Prisma.sql`${priceExpr} ASC`, "price-desc": Prisma.sql`${priceExpr} DESC`,
     popularity: Prisma.sql`p.total_sales DESC, p.views DESC`,
     name: Prisma.sql`p.name ASC`, random: Prisma.sql`RANDOM()`, menu_order: Prisma.sql`p.name ASC`,
@@ -135,7 +143,7 @@ export async function listProducts(p: ListParams = {}) {
       WHERE ${cond} ORDER BY ${order} LIMIT ${perPage} OFFSET ${(page - 1) * perPage}`,
     prisma.$queryRaw<{ total: bigint }[]>`SELECT COUNT(*) AS total FROM products p WHERE ${cond}`,
   ]);
-  return { items: rows.map(toCard), total: Number(total), page, perPage, pages: Math.max(1, Math.ceil(Number(total) / perPage)) };
+  return { items: rows.map(toCard), total: Number(total), page, perPage, pages: Math.max(1, Math.ceil(Number(total) / perPage)), partial };
 }
 
 /** Escapes % and _ so a search word is matched literally by LIKE/ILIKE */
@@ -184,10 +192,27 @@ export async function relatedProducts(productId: number, categoryIds: number[], 
   return r.items;
 }
 
+/** Header search dropdown: best products plus matching categories and brands */
 export async function searchSuggest(q: string, limit = 8) {
-  if (q.trim().length < 2) return [];
-  return (await listProducts({ search: q, perPage: limit, sort: "popularity" })).items;
+  if (q.trim().length < 2) return { products: [] as ProductCard[], total: 0, partial: false, categories: [], brands: [] };
+  const [res, match, cats, urls, brands] = await Promise.all([
+    listProducts({ search: q, perPage: limit, sort: "relevance" }), labelMatcher(q), getAllCategories(), categoryUrlMap(), brandCounts(),
+  ]);
+  const categories = cats.filter((c) => (c.count ?? 0) > 0 && match(c.name)).sort((a, b) => (b.count ?? 0) - (a.count ?? 0)).slice(0, 4)
+    .map((c) => ({ name: c.name, url: urls.get(c.id)!, count: c.count ?? 0 }));
+  const brandHits = brands.filter((b) => b.count > 0 && match(b.name)).slice(0, 3).map((b) => ({ name: b.name, url: `/brand/${b.slug}/`, count: b.count }));
+  return { products: res.items, total: res.total, partial: res.partial, categories, brands: brandHits };
 }
+
+/** Brands with how many published products each has, biggest first */
+const brandCounts = cache(async () => {
+  const [brands, counts] = await Promise.all([
+    prisma.brand.findMany({ select: { id: true, name: true, slug: true } }),
+    prisma.productBrand.groupBy({ by: ["brandId"], where: { product: { status: "published" } }, _count: { _all: true } }),
+  ]);
+  const m = new Map(counts.map((c) => [c.brandId, c._count._all]));
+  return brands.map((b) => ({ ...b, count: m.get(b.id) ?? 0 })).sort((a, b) => b.count - a.count);
+});
 
 /* ---------------- menus ---------------- */
 export type MenuNode = { id: number; label: string; url: string; children: MenuNode[] };

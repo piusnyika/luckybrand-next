@@ -488,3 +488,18 @@ model ContactMessage {
 
   @@map("contact_messages")
 }
+
+/// What shoppers searched for (Admin → Search): one row per normalised search, so staff can see what people want and what finds nothing
+model SearchTerm {
+  id          Int      @id @default(autoincrement())
+  term        String   @unique @db.VarChar(100)
+  searches    Int      @default(1)
+  /// how many products the latest search found (0 = nothing matched)
+  lastResults Int      @default(0) @map("last_results")
+  firstAt     DateTime @default(now()) @map("first_at")
+  lastAt      DateTime @default(now()) @map("last_at")
+
+  @@index([lastResults, searches], map: "search_terms_results")
+  @@index([lastAt], map: "search_terms_last")
+  @@map("search_terms")
+}

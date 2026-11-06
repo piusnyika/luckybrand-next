@@ -22,7 +22,7 @@ const tools = [
     }),
     eager_input_streaming: true,
     run: async (i) => {
-      const r = await listProducts({ search: i.query, categoryIds: i.category_id ? [i.category_id] : undefined, maxPrice: i.max_price, minPrice: i.min_price, inStock: i.in_stock_only, sort: i.sort ?? "popularity", perPage: 12 });
+      const r = await listProducts({ search: i.query, categoryIds: i.category_id ? [i.category_id] : undefined, maxPrice: i.max_price, minPrice: i.min_price, inStock: i.in_stock_only, sort: i.sort ?? (i.query ? "relevance" : "popularity"), perPage: 12 });
       return JSON.stringify({ total: r.total, products: r.items.map((p) => ({ name: p.name, sku: p.sku, slug: p.slug, url: `/product/${p.slug}/`, price: p.price, onSale: p.onSale, stock: p.stockStatus, isBundle: !!p.isBundle })) });
     },
   }),

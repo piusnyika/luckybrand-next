@@ -24,7 +24,7 @@ export async function saveAppearance(fd: FormData) {
   const social = lines(g(fd, "social")).map((l) => { const [icon, url] = l.split(/\s+/, 2); return { icon: icon.toLowerCase(), url }; }).filter((x) => x.url);
   const footerColumns = lines(g(fd, "footerColumns")).map((l) => { const [title, menu] = l.split("|").map((x) => x.trim()); return { title, menu }; }).filter((x) => x.menu);
   await saveSetting("site", {
-    ...site, noticeEnabled: fd.get("noticeEnabled") === "on", noticeHtml: g(fd, "noticeHtml"), noticeBg: g(fd, "noticeBg") || "#ed1b24",
+    ...site, // the old notice fields are kept as they were: messages now live in Admin → Announcements
     newsletterTitle: g(fd, "newsletterTitle"), newsletterSubtitle: g(fd, "newsletterSubtitle"), copyright: g(fd, "copyright"), marketingNote: g(fd, "marketingNote"),
     social, footerColumns,
     freeShippingThreshold: g(fd, "freeShippingThreshold") ? Number(g(fd, "freeShippingThreshold")) : null, freeShippingMessage: g(fd, "freeShippingMessage"), freeShippingSuccess: g(fd, "freeShippingSuccess"),
@@ -60,6 +60,7 @@ export async function saveNotifications(fd: FormData) {
   const on = (k: string) => fd.get(k) === "on";
   await saveSetting("notifications", {
     staffEmails: lines(g(fd, "staffEmails")).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)),
+    customerEmailBcc: lines(g(fd, "customerEmailBcc")).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)).slice(0, 5),
     lowStock: on("lowStock"), backInStock: on("backInStock"), abandonedCart: on("abandonedCart"),
     abandonedCartHours: Math.min(72, Math.max(1, Math.round(Number(g(fd, "abandonedCartHours")) || 3))),
     whatsapp: on("whatsapp"), whatsappTo: lines(g(fd, "whatsappTo")).filter((n) => n.replace(/\D/g, "").length >= 9),
